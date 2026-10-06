@@ -1,31 +1,42 @@
-name: Build mod
+plugins {
+	id 'fabric-loom' version '1.14-SNAPSHOT'
+}
 
-on:
-  push:
-  workflow_dispatch:
+version = project.mod_version
+group = project.maven_group
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+base {
+	archivesName = project.archives_base_name
+}
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
 
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: 9.2.0
+// Flat layout: the .java files and fabric.mod.json sit in the repo root,
+// so no folders are needed on GitHub.
+sourceSets {
+	main {
+		java {
+			srcDirs = ['.']
+			include 'PvpBotMod.java'
+		}
+		resources {
+			srcDirs = ['.']
+			include 'fabric.mod.json'
+		}
+	}
+}
 
-      - name: Build
-        run: gradle build --no-daemon
+tasks.withType(JavaCompile).configureEach {
+	options.release = 21
+	options.encoding = 'UTF-8'
+}
 
-      - name: Upload jar
-        uses: actions/upload-artifact@v4
-        with:
-          name: pvpbot-jar
-          path: |
-            build/libs/*.jar
-            !build/libs/*-sources.jar
+java {
+	sourceCompatibility = JavaVersion.VERSION_21
+	targetCompatibility = JavaVersion.VERSION_21
+}
