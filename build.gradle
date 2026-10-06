@@ -22,7 +22,7 @@ sourceSets {
 	main {
 		java {
 			srcDirs = ['.']
-			include '*.java'
+			include 'PvpBotMod.java'
 		}
 		resources {
 			srcDirs = ['.']
