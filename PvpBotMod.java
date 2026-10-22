@@ -1,6 +1,14 @@
 package dev.pvpbotcmd;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.serialization.DynamicOps;
+import com.mojang.serialization.JsonOps;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
@@ -448,7 +456,7 @@ public class PvpBotMod implements ModInitializer {
       "macefeardist", "mace_fear_distance", 6.0, 2.0, 20.0, false, "blocks: mace fear only starts while the target is this close, and ends once the target is more than 3 blocks past this"
    );
    static final PvpBotMod.Opt FALL_SHIELD_CHANCE = opt(
-      "fallshieldchance", "fall_shield_chance", 90.0, 0.0, 100.0, false, "percent chance (rolled once per dive) to raise the shield when the target is falling toward the bot, or is high above it with a mace"
+      "fallshieldchance", "fall_shield_chance", 100.0, 0.0, 100.0, false, "percent chance (rolled once per dive) to raise the shield when the target is falling toward the bot, or is high above it with a mace (100 = always)"
    );
    static final PvpBotMod.Opt FALL_MACE = opt(
       "fallmace", "fall_mace", 1.0, 0.0, 1.0, true, "when the bot falls toward the target it may smash it with a mace"
@@ -666,12 +674,6 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt JUMP_RESET_RANGE = opt(
       "jumpresetrange", "jump_reset_range", 4.5, 2.0, 8.0, false, "jump reset only happens when the target is within this many blocks"
    );
-   static final PvpBotMod.Opt STRAFE_PREDICT = opt(
-      "strafepredict", "strafe_predict", 1.0, 0.0, 1.0, true, "aim where a strafing target is going (uses its measured movement) instead of where it is"
-   );
-   static final PvpBotMod.Opt STRAFE_LEAD = opt(
-      "strafelead", "strafe_lead_ticks", 3.0, 0.0, 8.0, false, "ticks of target movement the strafe prediction leads the aim by"
-   );
    static final PvpBotMod.Opt ARENA_COUNT = opt("arenacount", "arena_crowd_count", 20.0, 2.0, 60.0, false, "bots spawned by the crowd button");
    static final PvpBotMod.Opt CROWD_RADIUS = opt("crowdradius", "crowd_roam_radius", 8.0, 3.0, 30.0, false, "blocks a crowd bot may wander from its spawn spot");
    static final PvpBotMod.Opt CROWD_CHAT = opt("crowdchat", "crowd_chat_seconds", 25.0, 5.0, 300.0, false, "average seconds between two crowd bots starting a conversation");
@@ -846,7 +848,7 @@ public class PvpBotMod implements ModInitializer {
       0.0,
       1.0,
       true,
-      "throw an experience bottle at itself to repair mending armor when all of it is low on durability"
+      "mending repair run: when enough worn mending armor is low, the bot backs off from its target and throws experience bottles at its feet"
    );
    static final PvpBotMod.Opt EXP_BOTTLE_THRESHOLD = opt(
       "expbottlethreshold",
@@ -855,7 +857,55 @@ public class PvpBotMod implements ModInitializer {
       1.0,
       100.0,
       false,
-      "percent durability remaining, for every mending armor piece, that triggers this"
+      "percent durability remaining at or below which a worn mending armor piece counts as low"
+   );
+   static final PvpBotMod.Opt KIT_RESPAWN = opt(
+      "kitrespawn", "kit_respawn", 1.0, 0.0, 1.0, true, "a bot that was given a kit gets it again when it respawns or rejoins (bots with no kit are left alone)"
+   );
+   static final PvpBotMod.Opt KIT_REPAIR = opt(
+      "kitrepair", "kit_repair", 1.0, 0.0, 1.0, true, "kits are handed out at full durability, even when the saved items were damaged"
+   );
+   static final PvpBotMod.Opt FALL_BACK_CHANCE = opt(
+      "fallbackchance", "fall_back_chance", 70.0, 0.0, 100.0, false, "percent chance (rolled once per dive) that a bot with no shield backs away while still facing a target that is falling at it, then hits it as soon as it lands"
+   );
+   static final PvpBotMod.Opt PRED_WEB_CHANCE = opt(
+      "predictwebchance", "predict_web_chance", 40.0, 0.0, 100.0, false, "percent chance to put a cobweb where a closing-in target is about to stand: when the bot starts healing with the target close, or when it is at 6 hearts or less and the target rushes it"
+   );
+   static final PvpBotMod.Opt PRED_WEB_COOLDOWN = opt(
+      "predictwebcooldown", "predict_web_cooldown_seconds", 20.0, 3.0, 120.0, false, "seconds between two predicted-position webs"
+   );
+   static final PvpBotMod.Opt ADAPT_HITS = opt(
+      "adapthits", "adapt_hits", 5.0, 2.0, 15.0, false, "adaptation: hits taken from the same target within 15 seconds (a crit counts double) before the bot may switch to spamming mace attacks"
+   );
+   static final PvpBotMod.Opt ADAPT_MACE_CHANCE = opt(
+      "adaptmacechance", "adapt_mace_chance", 40.0, 0.0, 100.0, false, "percent chance the bot adapts with mace spam once it was hit that often (needs a mace and wind charges)"
+   );
+   static final PvpBotMod.Opt ADAPT_MACE_MIN = opt(
+      "adaptmacemin", "adapt_mace_min_tries", 3.0, 1.0, 12.0, false, "fewest wind charge mace attempts in one adaptation spam"
+   );
+   static final PvpBotMod.Opt ADAPT_MACE_MAX = opt(
+      "adaptmacemax", "adapt_mace_max_tries", 8.0, 1.0, 12.0, false, "most wind charge mace attempts in one adaptation spam"
+   );
+   static final PvpBotMod.Opt MEND_PIECES = opt(
+      "mendpieces", "mend_pieces", 2.0, 1.0, 4.0, false, "how many worn mending armor pieces must be low before the bot starts a repair run"
+   );
+   static final PvpBotMod.Opt MEND_RUN_RANGE = opt(
+      "mendrunrange", "mend_run_range", 5.0, 3.0, 15.0, false, "blocks the bot backs away from its target before it starts throwing experience bottles"
+   );
+   static final PvpBotMod.Opt MEND_STOP = opt(
+      "mendstop", "mend_stop_percent", 60.0, 20.0, 100.0, false, "percent durability every mending piece must reach before the repair run ends"
+   );
+   static final PvpBotMod.Opt MEND_RETRY = opt(
+      "mendretry", "mend_retry_seconds", 10.0, 2.0, 120.0, false, "seconds before the bot tries a repair run again after it was interrupted by the target"
+   );
+   static final PvpBotMod.Opt MEND_INTERVAL = opt(
+      "mendinterval", "mend_throw_ticks", 6.0, 2.0, 40.0, false, "ticks between two experience bottle throws during a repair run"
+   );
+   static final PvpBotMod.Opt LOW_FIGHT_CHANCE = opt(
+      "lowfightchance", "low_fight_chance", 25.0, 0.0, 100.0, false, "percent chance (rolled once per low-health spell) that a bot which wants to heal keeps fighting instead when its target is at 4 hearts or less"
+   );
+   static final PvpBotMod.Opt FINISH_MACE_CHANCE = opt(
+      "finishmacechance", "finish_mace_chance", 30.0, 0.0, 100.0, false, "percent chance (rolled every second) to wind-charge mace-smash a target at 4 hearts or less, ignoring the wind mace health gate and cooldown (never while webbed)"
    );
    static final PvpBotMod.Opt TOUR_TIME = opt(
       "tourtime", "tournament_round_seconds", 120.0, 10.0, 900.0, false, "seconds a tournament round may last; when it runs out the bot with more health wins"
@@ -1076,6 +1126,7 @@ public class PvpBotMod implements ModInitializer {
          register(d);
       });
       ServerTickEvents.END_SERVER_TICK.register(BotSupport::tick);
+      ServerLifecycleEvents.SERVER_STARTED.register(server -> Kits.load(server));
       net.fabricmc.fabric.api.event.player.UseBlockCallback.EVENT.register((player, world, hand, hit) -> {
          if (player instanceof ServerPlayerEntity && world instanceof net.minecraft.server.world.ServerWorld) {
             ItemStack held = player.getStackInHand(hand);
@@ -1089,6 +1140,7 @@ public class PvpBotMod implements ModInitializer {
       });
       ServerLifecycleEvents.SERVER_STOPPED.register((ServerStopped)server -> {
          flushLog();
+         Kits.clearMemory();
          BOTS.clear();
          STOPPED.clear();
          FIGHTS.clear();
@@ -1116,7 +1168,15 @@ public class PvpBotMod implements ModInitializer {
       root.requires(BotSupport::allowed);
       root.then(
          CommandManager.literal("spawn")
-            .then(CommandManager.argument("name", StringArgumentType.word()).executes(ctx -> spawn(ctx, StringArgumentType.getString(ctx, "name"))))
+            .then(
+               ((RequiredArgumentBuilder)CommandManager.argument("name", StringArgumentType.word())
+                     .executes(ctx -> spawn(ctx, StringArgumentType.getString(ctx, "name"), null)))
+                  .then(
+                     CommandManager.argument("kit", StringArgumentType.word())
+                        .suggests(Kits.KIT_NAMES)
+                        .executes(ctx -> spawn(ctx, StringArgumentType.getString(ctx, "name"), StringArgumentType.getString(ctx, "kit")))
+                  )
+            )
       );
       root.then(
          CommandManager.literal("adopt")
@@ -1194,6 +1254,7 @@ public class PvpBotMod implements ModInitializer {
             )
       );
       Tiers.register(root);
+      Kits.register(root);
       root.then(
          ((LiteralArgumentBuilder)CommandManager.literal("log")
                .executes(ctx -> logCmd(ctx, null, 15)))
@@ -1260,10 +1321,15 @@ public class PvpBotMod implements ModInitializer {
          CommandManager.literal("mass_spawn")
             .then(
                ((RequiredArgumentBuilder)CommandManager.argument("count", IntegerArgumentType.integer(1, 100))
-                     .executes(ctx -> massSpawn(ctx, IntegerArgumentType.getInteger(ctx, "count"), null)))
+                     .executes(ctx -> massSpawn(ctx, IntegerArgumentType.getInteger(ctx, "count"), null, null)))
                   .then(
-                     CommandManager.argument("team", StringArgumentType.word())
-                        .executes(ctx -> massSpawn(ctx, IntegerArgumentType.getInteger(ctx, "count"), StringArgumentType.getString(ctx, "team")))
+                     ((RequiredArgumentBuilder)CommandManager.argument("team", StringArgumentType.word())
+                           .executes(ctx -> massSpawn(ctx, IntegerArgumentType.getInteger(ctx, "count"), StringArgumentType.getString(ctx, "team"), null)))
+                        .then(
+                           CommandManager.argument("kit", StringArgumentType.word())
+                              .suggests(Kits.KIT_NAMES)
+                              .executes(ctx -> massSpawn(ctx, IntegerArgumentType.getInteger(ctx, "count"), StringArgumentType.getString(ctx, "team"), StringArgumentType.getString(ctx, "kit")))
+                        )
                   )
             )
       );
@@ -1475,8 +1541,13 @@ public class PvpBotMod implements ModInitializer {
       return dispatcher != null && dispatcher.getRoot().getChild("playerspawn") != null && dispatcher.getRoot().getChild("player") != null;
    }
 
-   static int spawn(CommandContext<ServerCommandSource> ctx, String name) throws CommandSyntaxException {
+   static int spawn(CommandContext<ServerCommandSource> ctx, String name, String kit) throws CommandSyntaxException {
       ServerCommandSource src = (ServerCommandSource)ctx.getSource();
+      if (kit != null && !Kits.STORE.containsKey(Kits.key(kit))) {
+         src.sendError(Text.literal("No kit named " + kit + ". See /pvpbot kit list."));
+         return 0;
+      }
+
       ServerPlayerEntity me = src.getPlayerOrThrow();
       MinecraftServer server = src.getServer();
       if (!herobotPresent()) {
@@ -1493,7 +1564,9 @@ public class PvpBotMod implements ModInitializer {
          return 0;
       } else {
          server.getCommandManager().parseAndExecute(src, "playerspawn " + name);
-         PENDING.put(name, new PvpBotMod.Pending(me.getName().getString(), false, null, null));
+         PvpBotMod.Pending pend = new PvpBotMod.Pending(me.getName().getString(), false, null, null);
+         pend.kit = kit == null ? null : Kits.key(kit);
+         PENDING.put(name, pend);
          return 1;
       }
    }
@@ -1671,7 +1744,8 @@ public class PvpBotMod implements ModInitializer {
 
    static int help(CommandContext<ServerCommandSource> ctx) {
       String[] lines = new String[]{
-         "/pvpbot spawn <name>     |    mass_spawn <count> [team]     |    adopt <name>",
+         "/pvpbot spawn <name> [kit]     |    mass_spawn <count> [team] [kit]     |    adopt <name>",
+         "Kits: /pvpbot kit save|savebot|delete|rename|list|show|copy|export|import|clear|give|random  (give <kit> [bot | team <team>] wipes first; menu: /pvpbot gui -> Kits). Settings: kitrespawn, kitrepair. Mending repair run: expbottle, expbottlethreshold, mendpieces, mendrunrange, mendstop, mendretry, mendinterval. Also lowfightchance, finishmacechance, fallbackchance, predictwebchance/predictwebcooldown and the adaptation spam (adapthits, adaptmacechance, adaptmacemin, adaptmacemax).",
          "/pvpbot fight <name> [target]    |    stop <name>    |   remove <name>    |    clear    |    list",
          "/pvpbot status <name>    |    ping <name> <ms>    |    reload    |    options    |    gui",
          "/pvpbot test elytramace [bot]  runs the wind launch + elytra glide + mace smash once (needs wind charge, mace, elytra)",
@@ -1761,8 +1835,15 @@ public class PvpBotMod implements ModInitializer {
       }
    }
 
-   static int massSpawn(CommandContext<ServerCommandSource> ctx, int count, String team) throws CommandSyntaxException {
+   static int massSpawn(CommandContext<ServerCommandSource> ctx, int count, String teamArg, String kit) throws CommandSyntaxException {
       ServerCommandSource src = (ServerCommandSource)ctx.getSource();
+      final String team = teamArg != null && (teamArg.equals("-") || teamArg.equalsIgnoreCase("none")) ? null : teamArg;
+
+      if (kit != null && !Kits.STORE.containsKey(Kits.key(kit))) {
+         src.sendError(Text.literal("No kit named " + kit + ". See /pvpbot kit list."));
+         return 0;
+      }
+
       ServerPlayerEntity me = src.getPlayerOrThrow();
       MinecraftServer server = src.getServer();
       if (!herobotPresent()) {
@@ -1783,7 +1864,7 @@ public class PvpBotMod implements ModInitializer {
             src.sendError(Text.literal("No usable names found (or generated) in " + namesPath().getFileName() + "."));
             return 0;
          } else {
-            queueMassJobs(server, me, names, team);
+            queueMassJobs(server, me, names, team, kit);
             int total = names.size();
             String shown = String.join(", ", names.subList(0, Math.min(3, names.size()))) + (names.size() > 3 ? ", ..." : "");
             src.sendFeedback(() -> Text.literal("Spawning " + total + " bots: " + shown + (team != null ? " on team " + team : "")), false);
@@ -1866,7 +1947,7 @@ public class PvpBotMod implements ModInitializer {
       return FabricLoader.getInstance().getConfigDir().resolve("pvpbotcmd_names.txt");
    }
 
-   static void queueMassJobs(MinecraftServer server, ServerPlayerEntity owner, List<String> names, String team) {
+   static void queueMassJobs(MinecraftServer server, ServerPlayerEntity owner, List<String> names, String team, String kit) {
       Vec3d base = owner.getEntityPos();
       double radius = Math.max(3.0, Math.min(12.0, names.size() * 0.7));
       String ownerName = owner.getName().getString();
@@ -1877,7 +1958,9 @@ public class PvpBotMod implements ModInitializer {
       for (int i = 0; i < names.size(); i++) {
          double angle = (Math.PI * 2) * i / names.size();
          Vec3d pos = new Vec3d(base.x + Math.cos(angle) * radius, base.y, base.z + Math.sin(angle) * radius);
-         MASS_QUEUE.add(new PvpBotMod.MassJob(ownerName, names.get(i), team, pos));
+         PvpBotMod.MassJob mj = new PvpBotMod.MassJob(ownerName, names.get(i), team, pos);
+         mj.kit = kit == null ? null : Kits.key(kit);
+         MASS_QUEUE.add(mj);
       }
    }
 
@@ -1930,7 +2013,7 @@ public class PvpBotMod implements ModInitializer {
             return 1;
          }
       } else {
-         queueMassJobs(server, me, missing, null);
+         queueMassJobs(server, me, missing, null, null);
          ffaAutoStart = true;
          ffaAutoTeams = teams;
          int respawnCount = missing.size();
@@ -2241,10 +2324,6 @@ public class PvpBotMod implements ModInitializer {
       int baitUntil;
       int baitNext;
       int nextPearlAggroTick;
-      Vec3d spPrev;
-      double spVx;
-      double spVz;
-      int spTick = -1;
       int pagStage;
       int pagStart;
       Vec3d pagFrom;
@@ -2336,7 +2415,27 @@ public class PvpBotMod implements ModInitializer {
       boolean targetHadTotem;
       int healsRemaining;
       int nextDurabilityCheck;
-      int nextExpBottleTick;
+      int nextMendTick;
+      int fallHoldUntil;
+      int nextDodgeTick;
+      int dodgeStart;
+      int dodgeMove;
+      boolean dodgeRolled;
+      int nextPredWebTick;
+      int pwStage;
+      int pwStart;
+      BlockPos pwCell;
+      int hitsTaken;
+      int hitsWindowStart;
+      boolean adaptRolled;
+      int adaptTries;
+      int adaptUntil;
+      int mendStage;
+      int mendStart;
+      int mendNextThrow;
+      int mendSlot = -1;
+      boolean lowFightRolled;
+      boolean lowFightOn;
       int nextFearTick;
       int fearFar;
       double fearYawOff;
@@ -2546,6 +2645,10 @@ public class PvpBotMod implements ModInitializer {
          this.punishCrit = false;
          this.fearMode = 0;
          this.fearMove = 0;
+         this.mendStage = 0;
+         this.mendSlot = -1;
+         this.pwStage = 0;
+         this.dodgeMove = 0;
          this.fallRoll = 0;
          this.climbStuck = 0;
          this.launchStage = 0;
@@ -2660,6 +2763,7 @@ public class PvpBotMod implements ModInitializer {
       final String name;
       final String team;
       final Vec3d pos;
+      String kit;
 
       MassJob(String owner, String name, String team, Vec3d pos) {
          this.owner = owner;
@@ -2727,6 +2831,7 @@ public class PvpBotMod implements ModInitializer {
       final boolean quiet;
       final String team;
       final Vec3d tpPos;
+      String kit;
       int waited;
 
       Pending(String owner, boolean quiet, String team, Vec3d tpPos) {
@@ -2755,7 +2860,10 @@ public class PvpBotMod implements ModInitializer {
       BLOCKRUN,
       ELYTRA,
       TNTCART,
-      PEARLAGGRO;
+      PEARLAGGRO,
+      MEND,
+      DODGE,
+      PREDWEB;
    }
 
    static final class PlacedWeb {
@@ -3937,23 +4045,7 @@ final class BotSupport {
    static String aimCmd(String name, ServerPlayerEntity bot, ServerPlayerEntity target, PvpBotMod.Fight f) {
       double w = PvpBotMod.WOBBLE.value;
       double lead = PvpBotMod.PREDICT_TICKS.value;
-      boolean sPred = PvpBotMod.STRAFE_PREDICT.on() && PvpBotMod.AIM.asInt() <= 2 && PvpBotMod.STRAFE_LEAD.value > 0.0;
-      if (sPred && f.spTick != PvpBotMod.globalTick) {
-         Vec3d p = target.getEntityPos();
-         if (f.spPrev != null && PvpBotMod.globalTick - f.spTick <= 3) {
-            int dt = Math.max(1, PvpBotMod.globalTick - f.spTick);
-            f.spVx = f.spVx * 0.4 + (p.x - f.spPrev.x) / dt * 0.6;
-            f.spVz = f.spVz * 0.4 + (p.z - f.spPrev.z) / dt * 0.6;
-         } else {
-            f.spVx = 0.0;
-            f.spVz = 0.0;
-         }
-
-         f.spPrev = p;
-         f.spTick = PvpBotMod.globalTick;
-      }
-
-      boolean leading = (lead > 0.0 || sPred) && PvpBotMod.AIM.asInt() <= 2;
+      boolean leading = lead > 0.0 && PvpBotMod.AIM.asInt() <= 2;
       boolean spread = PvpBotMod.AIM_SPREAD.value > 0.0 && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.AIM_SPREAD.value;
       boolean overshootRoll = !f.overshotLast
          && PvpBotMod.OVERSHOOT_CHANCE.value > 0.0
@@ -3964,19 +4056,10 @@ final class BotSupport {
          double tx = target.getX();
          double tz = target.getZ();
          if (leading) {
-            double lvx;
-            double lvz;
-            double ll;
-            if (sPred) {
-               lvx = f.spVx;
-               lvz = f.spVz;
-               ll = Math.max(lead, PvpBotMod.STRAFE_LEAD.value);
-            } else {
-               Vec3d vel = target.getVelocity();
-               lvx = vel.x;
-               lvz = vel.z;
-               ll = lead;
-            }
+            Vec3d vel = target.getVelocity();
+            double lvx = vel.x;
+            double lvz = vel.z;
+            double ll = lead;
 
             double ox = lvx * ll;
             double oz = lvz * ll;
@@ -4265,6 +4348,8 @@ final class BotSupport {
          tickPending(server);
       }
 
+      Kits.tick(server);
+
       if (!PvpBotMod.PENDING_CHESTS.isEmpty()) {
          tickPendingChests();
       }
@@ -4329,7 +4414,9 @@ final class BotSupport {
             PvpBotMod.MASS_QUEUE.clear();
          } else if (server.getPlayerManager().getPlayer(job.name) == null && !PvpBotMod.PENDING.containsKey(job.name)) {
             server.getCommandManager().parseAndExecute(owner.getCommandSource().withSilent(), "playerspawn " + job.name);
-            PvpBotMod.PENDING.put(job.name, new PvpBotMod.Pending(job.owner, true, job.team, job.pos));
+            PvpBotMod.Pending pend = new PvpBotMod.Pending(job.owner, true, job.team, job.pos);
+            pend.kit = job.kit;
+            PvpBotMod.PENDING.put(job.name, pend);
             if (PvpBotMod.MASS_QUEUE.isEmpty()) {
                owner.sendMessage(Text.literal("Mass spawn: all bots requested. They join over the next moments."));
             }
@@ -4373,6 +4460,10 @@ final class BotSupport {
                run(server, "tp " + name + " " + fmt(p.tpPos.x) + " " + fmt(p.tpPos.y) + " " + fmt(p.tpPos.z));
             }
 
+            if (p.kit != null) {
+               Kits.give(server, server.getPlayerManager().getPlayer(name), p.kit, true);
+            }
+
             if (owner != null && !p.quiet) {
                owner.sendMessage(
                   Text.literal(
@@ -4408,7 +4499,6 @@ final class BotSupport {
 
             if (f != null) {
                maybeSwapDurability(bot, f);
-               maybeThrowExpBottle(server, name, bot, f);
             }
          }
       }
@@ -4488,29 +4578,33 @@ final class BotSupport {
       }
    }
 
-   static void maybeThrowExpBottle(MinecraftServer server, String name, ServerPlayerEntity bot, PvpBotMod.Fight f) {
-      if (PvpBotMod.EXP_BOTTLE.on() && PvpBotMod.globalTick >= f.nextExpBottleTick) {
-         EquipmentSlot[] slots = new EquipmentSlot[]{EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET};
-
-         for (EquipmentSlot slot : slots) {
-            ItemStack piece = bot.getEquippedStack(slot);
-            if (piece.isEmpty() || !hasMending(piece, bot) || !lowDurabilityAt(piece, PvpBotMod.EXP_BOTTLE_THRESHOLD.value)) {
-               return;
-            }
-         }
-
-         f.nextExpBottleTick = PvpBotMod.globalTick + 100;
-         int idx = findItemIndex(bot, Items.EXPERIENCE_BOTTLE);
-         if (idx >= 0) {
-            int slotx = toHotbar(bot, idx, findWeaponSlot(bot));
-            if (slotx >= 0) {
-               run(server, "player " + name + " hotbar " + (slotx + 1));
-               run(server, "player " + name + " look " + fmt(bot.getYaw()) + " 90");
-               run(server, "player " + name + " use once");
-               f.weaponSlot = -1;
-            }
+   static int mendingWorn(ServerPlayerEntity bot) {
+      int n = 0;
+      for (EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}) {
+         ItemStack piece = bot.getEquippedStack(slot);
+         if (!piece.isEmpty() && piece.isDamageable() && hasMending(piece, bot)) {
+            n++;
          }
       }
+
+      return n;
+   }
+
+   static int mendingLow(ServerPlayerEntity bot, double pct) {
+      int n = 0;
+      for (EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}) {
+         ItemStack piece = bot.getEquippedStack(slot);
+         if (!piece.isEmpty() && hasMending(piece, bot) && lowDurabilityAt(piece, pct)) {
+            n++;
+         }
+      }
+
+      return n;
+   }
+
+   /** true while every worn mending piece is above the stop percent. */
+   static boolean mendDone(ServerPlayerEntity bot) {
+      return mendingLow(bot, PvpBotMod.MEND_STOP.value) == 0;
    }
 
    static void tickRevenge(MinecraftServer server) {
@@ -5896,6 +5990,9 @@ final class BotSupport {
                PvpBotMod.GOTOS.remove(n);
                PvpBotMod.LOOTING.remove(n);
                run(server, "player " + n + " stop");
+               if (Kits.ffaKit != null && Kits.STORE.containsKey(Kits.key(Kits.ffaKit))) {
+                  Kits.give(server, server.getPlayerManager().getPlayer(n), Kits.ffaKit, true);
+               }
             }
 
             broadcast(server, "FFA match" + (teams ? " (teams)" : "") + ": " + PvpBotMod.FFA_ALIVE.size() + " fighters. Everyone freezes for " + PvpBotMod.FFA_FREEZE.asInt() + " seconds...");
@@ -6161,6 +6258,15 @@ final class Fighting {
                   case BLOCKRUN:
                      blockRunPhase(server, name, f, bot, target, dist);
                      break;
+                  case MEND:
+                     mendPhase(server, name, f, bot, target, dist);
+                     break;
+                  case DODGE:
+                     dodgePhase(server, name, f, bot, target, dist);
+                     break;
+                  case PREDWEB:
+                     predWebPhase(server, name, f, bot, target, dist);
+                     break;
                   default:
                      break;
                }
@@ -6257,6 +6363,10 @@ final class Fighting {
             && !target.isClimbing()
             && !target.isTouchingWater()
             && !target.isSprinting();
+         if (bot.getAttacker() == target) {
+            noteHitTaken(f, critHit);
+         }
+
          if (critHit && PvpBotMod.COCOON_ON_CRIT.on()) {
             if (PvpBotMod.globalTick - f.critWindowStart > PvpBotMod.COCOON_CRIT_WINDOW.asInt()) {
                f.critWindowStart = PvpBotMod.globalTick;
@@ -6335,6 +6445,7 @@ final class Fighting {
 
       if (windCounterStep(server, name, f, bot, target, dist, false)
          || maceFearStep(server, name, f, bot, target, dist)
+         || fallDodgeStep(server, name, f, bot, target, dist)
          || windClimbStep(server, name, f, bot, target)
          || windMaceStep(server, name, f, bot, target, dist)
          || pillarStep(server, name, f, bot, target, dist, false)
@@ -6342,7 +6453,9 @@ final class Fighting {
          || tntCartStep(server, name, f, bot, target, dist)
          || prepStep(server, name, f, bot, target, dist)
          || pearlAggroStep(server, name, f, bot, target, dist)
-         || baitStep(server, name, f, bot, target, dist)) {
+         || baitStep(server, name, f, bot, target, dist)
+         || predWebStep(server, name, f, bot, target, dist)
+         || mendStep(server, name, f, bot, target, dist)) {
          return;
       }
 
@@ -6361,13 +6474,29 @@ final class Fighting {
             boolean hungry = PvpBotMod.HUNGER_EAT_LEVEL.value > 0.0 && bot.getHungerManager().getFoodLevel() <= PvpBotMod.HUNGER_EAT_LEVEL.asInt();
             double eatAt = BotSupport.eatThresholdHearts(f);
             boolean lowHealth = eatAt > 0.0 && hpNow <= eatAt * 2.0;
-            if ((lowHealth || hungry) && PvpBotMod.globalTick >= f.nextEatTick && BotSupport.findFoodIndex(bot) >= 0) {
+            if (!lowHealth) {
+               f.lowFightRolled = false;
+               f.lowFightOn = false;
+            } else {
+               double tHp = target.getHealth() + target.getAbsorptionAmount();
+               if (!f.lowFightRolled) {
+                  f.lowFightRolled = true;
+                  f.lowFightOn = tHp <= 8.0 && chance(PvpBotMod.LOW_FIGHT_CHANCE.value);
+                  if (f.lowFightOn) {
+                     flog(f, "low health but the target is nearly dead: finishing the fight instead of healing");
+                  }
+               } else if (f.lowFightOn && tHp > 8.0) {
+                  f.lowFightOn = false;
+               }
+            }
+
+            if (!(lowHealth && f.lowFightOn) && (lowHealth || hungry) && PvpBotMod.globalTick >= f.nextEatTick && BotSupport.findFoodIndex(bot) >= 0) {
                if (BotSupport.inCobweb(bot) && !f.inCocoon) {
                   // stuck in a web: a wind charge or pearl can free it, otherwise heal where it stands
                   if (!startItemEscape(server, name, f, bot, target)) {
                      startEat(server, name, f, bot, true);
                   }
-               } else if (!startEatKnockback(server, name, f, bot, target, dist) && !startBlockRun(server, name, f, bot, target) && !startElyEscape(server, name, f, bot, target) && !startItemEscape(server, name, f, bot, target)) {
+               } else if (!predWebGap(server, name, f, bot, target, dist) && !startEatKnockback(server, name, f, bot, target, dist) && !startBlockRun(server, name, f, bot, target) && !startElyEscape(server, name, f, bot, target) && !startItemEscape(server, name, f, bot, target)) {
                   startFlee(server, name, f, 0);
                }
             } else if (!BotSupport.lavaStep(server, name, f, bot, target) && !BotSupport.webPlaceStep(server, name, f, bot, target)) {
@@ -6651,6 +6780,9 @@ final class Fighting {
                      if (f.blocking && f.threatHold && !threatStill && PvpBotMod.globalTick >= f.threatHoldFrom + 3) {
                         // the mace threat is gone (landed, went away, too far): drop the shield now instead of holding it out
                         f.blockUntil = PvpBotMod.globalTick;
+                     } else if (f.blocking && f.threatHold && threatStill && f.blockUntil < PvpBotMod.globalTick + 2) {
+                        // still coming down: the shield stays up, no gap between two timers
+                        f.blockUntil = PvpBotMod.globalTick + 4;
                      }
 
                      if (maceThreat) {
@@ -7443,9 +7575,15 @@ final class Fighting {
       return target.getEquippedStack(EquipmentSlot.CHEST).isOf(Items.ELYTRA) || target.getY() > bot.getY() + 3.0 || target.fallDistance > 1.5;
    }
 
+   /**
+    * true while the shield should stay up against a target that is coming down on the bot. Once it was chosen (rolled)
+    * the shield is held until the target has landed (or left), not just while it is falling fast: that is what makes the
+    * bot keep blocking all the way down, like VexBot does.
+    */
    static boolean fallShieldWanted(PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
       if (target.isOnGround()) {
          f.fallRoll = 0;
+         f.fallHoldUntil = 0;
          return false;
       } else if (PvpBotMod.FALL_SHIELD_CHANCE.value <= 0.0 || tradeMace(bot)) {
          return false;
@@ -7461,18 +7599,207 @@ final class Fighting {
          double hx = target.getX() - bot.getX();
          double hz = target.getZ() - bot.getZ();
          double hd = Math.sqrt(hx * hx + hz * hz);
-         boolean dropping = f.tgtDy < -0.2 || target.getVelocity().y < -0.35;
-         boolean falling = dropping && target.getY() > bot.getY() + 1.0 && hd <= 10.0;
+         boolean dropping = f.tgtDy < -0.1 || target.getVelocity().y < -0.2;
+         boolean falling = dropping && target.getY() > bot.getY() + 0.6 && hd <= 8.0;
          // a mace user that is simply high above the bot (gliding, hovering, about to dive) also counts
          boolean highMace = target.getY() > bot.getY() + 2.5 && hd <= 10.0 && targetMaceThreat(bot, target);
-         if (!falling && !highMace) {
+         // already blocking this dive: keep it up while the target is still in the air near and not below the bot
+         boolean held = f.fallRoll == 2 && now <= f.fallHoldUntil && hd <= 9.0 && target.getY() > bot.getY() - 0.3;
+         if (!falling && !highMace && !held) {
             return false;
          } else {
             if (f.fallRoll == 0) {
                f.fallRoll = ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.FALL_SHIELD_CHANCE.value ? 2 : 1;
+               f.fallHoldUntil = now + 100;
             }
 
             return f.fallRoll == 2;
+         }
+      }
+   }
+
+   /** no shield: back away while still facing a target that is falling at the bot, then hit it when it lands. */
+   static boolean fallDodgeStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (target.isOnGround()) {
+         f.dodgeRolled = false;
+         return false;
+      }
+
+      if (PvpBotMod.FALL_BACK_CHANCE.value <= 0.0 || f.dodgeRolled || PvpBotMod.globalTick < f.nextDodgeTick || !bot.isOnGround() || BotSupport.inCobweb(bot) || tradeMace(bot)) {
+         return false;
+      }
+
+      if (bot.getEquippedStack(EquipmentSlot.OFFHAND).isOf(Items.SHIELD)) {
+         return false; // the shield handles it
+      }
+
+      double hx = target.getX() - bot.getX();
+      double hz = target.getZ() - bot.getZ();
+      double hd = Math.sqrt(hx * hx + hz * hz);
+      boolean dropping = target.getVelocity().y < -0.2 || target.fallDistance > 1.0;
+      if (!dropping || target.getY() < bot.getY() + 1.0 || hd > 7.0) {
+         return false;
+      }
+
+      f.dodgeRolled = true;
+      if (!chance(PvpBotMod.FALL_BACK_CHANCE.value)) {
+         return false;
+      }
+
+      BotSupport.run(server, "player " + name + " stop");
+      BotSupport.run(server, "player " + name + " unsprint");
+      clearFightFlags(f);
+      f.phase = PvpBotMod.Phase.DODGE;
+      f.dodgeStart = PvpBotMod.globalTick;
+      f.dodgeMove = 0;
+      flog(f, "fall dodge: backing away from a falling target");
+      return true;
+   }
+
+   static void endDodge(MinecraftServer server, String name, PvpBotMod.Fight f) {
+      BotSupport.run(server, "player " + name + " stop");
+      f.reset();
+      f.nextDodgeTick = PvpBotMod.globalTick + 30;
+   }
+
+   static void dodgePhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (target.isOnGround() || PvpBotMod.globalTick - f.dodgeStart > 80 || dist > 14.0 || BotSupport.inCobweb(bot)) {
+         endDodge(server, name, f);
+         return;
+      }
+
+      BotSupport.run(server, BotSupport.aimCmd(name, bot, target, f));
+      double dx = bot.getX() - target.getX();
+      double dz = bot.getZ() - target.getZ();
+      double len = Math.sqrt(dx * dx + dz * dz);
+      boolean blocked = false;
+      if (len > 0.05) {
+         blocked = PvpBotMod.VOID_AWARE.on() && BotSupport.hazardAt(BotSupport.sw(bot), bot.getX() + dx / len * 1.6, bot.getY(), bot.getZ() + dz / len * 1.6);
+      }
+
+      if (blocked) {
+         if (f.dodgeMove != 2) {
+            BotSupport.run(server, "player " + name + " move");
+            f.dodgeMove = 2;
+         }
+      } else if (f.dodgeMove != 1) {
+         BotSupport.run(server, "player " + name + " move backward");
+         f.dodgeMove = 1;
+      }
+   }
+
+   // ---- predicted-position web: the web goes where the target will be in a few ticks
+
+   static BlockPos predictWebCell(ServerPlayerEntity bot, ServerPlayerEntity target) {
+      World w = BotSupport.sw(bot);
+      Vec3d vel = target.getVelocity();
+      BlockPos start = BlockPos.ofFloored(target.getX() + vel.x * 4.0, target.getY(), target.getZ() + vel.z * 4.0);
+      for (int dy = 0; dy <= 3; dy++) {
+         BlockPos cell = start.down(dy);
+         if (w.getBlockState(cell).isAir() && !w.getBlockState(cell.down()).isAir()) {
+            BlockPos mine = bot.getBlockPos();
+            if (cell.equals(mine) || cell.equals(mine.up())) {
+               return null;
+            }
+
+            return bot.squaredDistanceTo(cell.getX() + 0.5, cell.getY(), cell.getZ() + 0.5) > 20.25 ? null : cell;
+         }
+      }
+
+      return null;
+   }
+
+   static boolean startPredWeb(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
+      if (PvpBotMod.PRED_WEB_CHANCE.value <= 0.0 || PvpBotMod.globalTick < f.nextPredWebTick || BotSupport.inCobweb(bot) || !bot.canSee(target)) {
+         return false;
+      }
+
+      int idx = BotSupport.findItemIndex(bot, Items.COBWEB);
+      int slot = idx < 0 ? -1 : BotSupport.toHotbar(bot, idx, BotSupport.findWeaponSlot(bot));
+      BlockPos cell = slot < 0 ? null : predictWebCell(bot, target);
+      f.nextPredWebTick = PvpBotMod.globalTick + 40;
+      if (cell == null) {
+         return false;
+      }
+
+      BotSupport.run(server, "player " + name + " stop");
+      BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+      BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(cell.getX() + 0.5) + " " + BotSupport.fmt(cell.getY()) + " " + BotSupport.fmt(cell.getZ() + 0.5));
+      clearFightFlags(f);
+      f.phase = PvpBotMod.Phase.PREDWEB;
+      f.pwStage = 1;
+      f.pwStart = PvpBotMod.globalTick;
+      f.pwCell = cell;
+      flog(f, "predicted web at " + cell.getX() + " " + cell.getY() + " " + cell.getZ());
+      return true;
+   }
+
+   /** healing starts with the target close: web its next position first (then the knockback / run logic carries on). */
+   static boolean predWebGap(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      return dist <= 4.5 && chance(PvpBotMod.PRED_WEB_CHANCE.value) && startPredWeb(server, name, f, bot, target);
+   }
+
+   /** low health and the target rushes in: put a web where it is about to stand. */
+   static boolean predWebStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (PvpBotMod.globalTick % 10 != 3 || dist < 2.5 || dist > 4.5 || bot.getHealth() + bot.getAbsorptionAmount() > 12.0) {
+         return false;
+      }
+
+      Vec3d v = target.getVelocity();
+      double dx = bot.getX() - target.getX();
+      double dz = bot.getZ() - target.getZ();
+      double len = Math.sqrt(dx * dx + dz * dz);
+      if (len < 0.05 || (v.x * dx + v.z * dz) / len < 0.1) {
+         return false; // not closing in
+      }
+
+      return chance(PvpBotMod.PRED_WEB_CHANCE.value) && startPredWeb(server, name, f, bot, target);
+   }
+
+   static void endPredWeb(MinecraftServer server, String name, PvpBotMod.Fight f) {
+      BotSupport.run(server, "player " + name + " stop");
+      f.reset();
+      f.nextPredWebTick = PvpBotMod.globalTick + Math.max(60, PvpBotMod.PRED_WEB_COOLDOWN.asInt() * 20);
+   }
+
+   static void predWebPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int elapsed = PvpBotMod.globalTick - f.pwStart;
+      BlockPos cell = f.pwCell;
+      if (cell == null || elapsed > 20 || BotSupport.findItemIndex(bot, Items.COBWEB) < 0 && f.pwStage == 1) {
+         endPredWeb(server, name, f);
+         return;
+      }
+
+      if (f.pwStage == 1) {
+         if (elapsed >= 2) {
+            BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(cell.getX() + 0.5) + " " + BotSupport.fmt(cell.getY()) + " " + BotSupport.fmt(cell.getZ() + 0.5));
+            BotSupport.useOnce(server, name, f);
+            f.pwStage = 2;
+            f.pwStart = PvpBotMod.globalTick;
+         }
+      } else if (elapsed >= 2) {
+         endPredWeb(server, name, f);
+      }
+   }
+
+   /** counts the hits the bot takes from its target; enough of them can switch it to mace spam (adaptation). */
+   static void noteHitTaken(PvpBotMod.Fight f, boolean crit) {
+      int now = PvpBotMod.globalTick;
+      if (now - f.hitsWindowStart > 300) {
+         f.hitsWindowStart = now;
+         f.hitsTaken = 0;
+         f.adaptRolled = false;
+      }
+
+      f.hitsTaken += crit ? 2 : 1;
+      if (!f.adaptRolled && f.adaptTries <= 0 && f.hitsTaken >= PvpBotMod.ADAPT_HITS.asInt()) {
+         f.adaptRolled = true;
+         if (chance(PvpBotMod.ADAPT_MACE_CHANCE.value)) {
+            int lo = Math.min(PvpBotMod.ADAPT_MACE_MIN.asInt(), PvpBotMod.ADAPT_MACE_MAX.asInt());
+            int hi = Math.max(PvpBotMod.ADAPT_MACE_MIN.asInt(), PvpBotMod.ADAPT_MACE_MAX.asInt());
+            f.adaptTries = lo + ThreadLocalRandom.current().nextInt(hi - lo + 1);
+            f.adaptUntil = now + 600;
+            flog(f, "adaptation: keeps getting hit, will spam the mace (" + f.adaptTries + " tries)");
          }
       }
    }
@@ -7529,8 +7856,12 @@ final class Fighting {
    static void maceFearPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
       f.fearGone = targetMaceThreat(bot, target) ? 0 : f.fearGone + 1;
       if (f.blocking && PvpBotMod.globalTick >= f.blockUntil) {
-         BotSupport.run(server, "player " + name + " use");
-         f.blocking = false;
+         if (!target.isOnGround() && dist <= 9.0 && bot.getEquippedStack(EquipmentSlot.OFFHAND).isOf(Items.SHIELD) && fallShieldWanted(f, bot, target)) {
+            f.blockUntil = PvpBotMod.globalTick + 4; // the diver is still in the air: keep blocking until it lands
+         } else {
+            BotSupport.run(server, "player " + name + " use");
+            f.blocking = false;
+         }
       }
 
       boolean forcedFear = f.testUntil > 0 && PvpBotMod.globalTick < f.testUntil;
@@ -8348,14 +8679,34 @@ final class Fighting {
          return false;
       }
 
+      if (PvpBotMod.FINISH_MACE_CHANCE.value > 0.0
+         && PvpBotMod.globalTick % 20 == 0
+         && target.getHealth() + target.getAbsorptionAmount() <= 8.0
+         && bot.isOnGround()
+         && dist >= 3.0
+         && dist <= 18.0
+         && BotSupport.findItemIndex(bot, Items.WIND_CHARGE) >= 0
+         && BotSupport.findItemIndex(bot, Items.MACE) >= 0
+         && chance(PvpBotMod.FINISH_MACE_CHANCE.value)) {
+         f.nextWindMaceTick = PvpBotMod.globalTick + Math.max(20, (int)(PvpBotMod.WINDMACE_COOLDOWN.asInt() / outMult(f)));
+         f.chainNextTick = PvpBotMod.globalTick + Math.max(5, PvpBotMod.MACE_CHAIN_GAP.asInt());
+         flog(f, "finisher mace on a low-health target");
+         return startWindLaunch(server, name, f, bot, target, 2);
+      }
+
+      if (f.adaptTries > 0 && PvpBotMod.globalTick > f.adaptUntil) {
+         f.adaptTries = 0;
+      }
+
+      boolean adapt = f.adaptTries > 0 && PvpBotMod.globalTick >= f.chainNextTick;
       boolean pressure = PvpBotMod.MACE_PRESSURE.on() && targetHealing(target) && dist <= PvpBotMod.MACE_PRESSURE_RANGE.value;
       boolean webbed = PvpBotMod.WEB_MACE.on() && BotSupport.inCobweb(target);
-      boolean forced = (f.chainRetry || pressure || webbed) && PvpBotMod.globalTick >= f.chainNextTick;
+      boolean forced = (f.chainRetry || pressure || webbed) && PvpBotMod.globalTick >= f.chainNextTick || adapt;
       if (!forced && (PvpBotMod.WINDMACE_CHANCE.value <= 0.0 || PvpBotMod.globalTick % 20 != 0 || PvpBotMod.globalTick < f.nextWindMaceTick)) {
          return false;
       } else if (!bot.isOnGround() || dist < (forced ? 1.5 : 3.0) || dist > 18.0) {
          return false;
-      } else if (bot.getHealth() + bot.getAbsorptionAmount() < PvpBotMod.WINDMACE_HEARTS.value * 2.0) {
+      } else if (bot.getHealth() + bot.getAbsorptionAmount() < (adapt ? 4.0 : PvpBotMod.WINDMACE_HEARTS.value * 2.0)) {
          return false;
       } else if (!forced && !(ThreadLocalRandom.current().nextDouble() * 100.0 < boosted(f, PvpBotMod.WINDMACE_CHANCE.value))) {
          return false;
@@ -8364,6 +8715,11 @@ final class Fighting {
       } else {
          f.nextWindMaceTick = PvpBotMod.globalTick + Math.max(20, (int)(PvpBotMod.WINDMACE_COOLDOWN.asInt() / outMult(f)));
          f.chainNextTick = PvpBotMod.globalTick + Math.max(5, PvpBotMod.MACE_CHAIN_GAP.asInt());
+         if (adapt) {
+            f.adaptTries--;
+            flog(f, "adaptation: mace spam, " + f.adaptTries + " tries left");
+         }
+
          return startWindLaunch(server, name, f, bot, target, 2);
       }
    }
@@ -11274,6 +11630,150 @@ final class Fighting {
       }
    }
 
+   static boolean mendStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (!PvpBotMod.EXP_BOTTLE.on() || PvpBotMod.globalTick < f.nextMendTick || PvpBotMod.globalTick % 5 != 0) {
+         return false;
+      }
+
+      if (f.inCocoon || !bot.isOnGround() || BotSupport.inCobweb(bot) || dist < 3.5 || targetMaceThreat(bot, target)) {
+         return false;
+      }
+
+      double hp = bot.getHealth() + bot.getAbsorptionAmount();
+      double eatAt = BotSupport.eatThresholdHearts(f);
+      boolean hungry = PvpBotMod.HUNGER_EAT_LEVEL.value > 0.0 && bot.getHungerManager().getFoodLevel() <= PvpBotMod.HUNGER_EAT_LEVEL.asInt();
+      if ((eatAt > 0.0 && hp <= eatAt * 2.0 || hungry) && BotSupport.findFoodIndex(bot) >= 0) {
+         return false; // healing comes first
+      }
+
+      int need = Math.min(PvpBotMod.MEND_PIECES.asInt(), BotSupport.mendingWorn(bot));
+      if (need <= 0 || BotSupport.mendingLow(bot, PvpBotMod.EXP_BOTTLE_THRESHOLD.value) < need) {
+         return false;
+      }
+
+      if (BotSupport.findItemIndex(bot, Items.EXPERIENCE_BOTTLE) < 0) {
+         f.nextMendTick = PvpBotMod.globalTick + 200;
+         return false;
+      }
+
+      BotSupport.run(server, "player " + name + " unsneak");
+      BotSupport.run(server, "player " + name + " stop");
+      BotSupport.run(server, "player " + name + " autojump true");
+      BotSupport.run(server, "player " + name + " sprint");
+      BotSupport.run(server, "player " + name + " move forward");
+      f.phase = PvpBotMod.Phase.MEND;
+      f.mendStage = 0;
+      f.mendStart = PvpBotMod.globalTick;
+      f.phaseStart = PvpBotMod.globalTick;
+      f.mendSlot = -1;
+      f.started = false;
+      f.hopping = false;
+      f.paused = false;
+      f.crit = false;
+      f.blocking = false;
+      f.axeMode = false;
+      f.attackTick = -1;
+      f.strafeDir = 0;
+      f.edgeHold = false;
+      f.nextMendTick = PvpBotMod.globalTick + PvpBotMod.MEND_RETRY.asInt() * 20;
+      flog(f, "mending repair run started");
+      return true;
+   }
+
+   static void endMend(MinecraftServer server, String name, PvpBotMod.Fight f, boolean interrupted) {
+      BotSupport.run(server, "player " + name + " stop");
+      f.reset();
+      f.nextMendTick = PvpBotMod.globalTick + (interrupted ? PvpBotMod.MEND_RETRY.asInt() * 20 : 200);
+   }
+
+   static void mendPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      double hp = bot.getHealth() + bot.getAbsorptionAmount();
+      double eatAt = BotSupport.eatThresholdHearts(f);
+      if (eatAt > 0.0 && hp <= eatAt * 2.0 && BotSupport.findFoodIndex(bot) >= 0) {
+         flog(f, "repair run dropped: needs to heal");
+         endMend(server, name, f, true);
+         return;
+      }
+
+      if (dist < 3.0 || targetMaceThreat(bot, target) && dist < 12.0) {
+         flog(f, "repair run interrupted by the target");
+         endMend(server, name, f, true);
+         return;
+      }
+
+      if (PvpBotMod.globalTick - f.mendStart > 500) {
+         endMend(server, name, f, false);
+         return;
+      }
+
+      double dx = bot.getX() - target.getX();
+      double dz = bot.getZ() - target.getZ();
+      double awayYaw = Math.toDegrees(Math.atan2(-dx, dz));
+      if (f.mendStage == 0) {
+         if (dist >= PvpBotMod.MEND_RUN_RANGE.value || PvpBotMod.globalTick - f.phaseStart > 60) {
+            f.mendStage = 1;
+            BotSupport.run(server, "player " + name + " stop");
+            f.mendNextThrow = PvpBotMod.globalTick + 3;
+            f.mendSlot = -1;
+            return;
+         }
+
+         if (PvpBotMod.globalTick % 2 == 0) {
+            double yaw = awayYaw;
+            if (PvpBotMod.VOID_AWARE.on()) {
+               double[] turns = new double[]{0.0, 50.0, -50.0, 100.0, -100.0};
+               for (double turn : turns) {
+                  double a = Math.toRadians(awayYaw + turn);
+                  double px = bot.getX() - Math.sin(a) * 1.6;
+                  double pz = bot.getZ() + Math.cos(a) * 1.6;
+                  if (!BotSupport.hazardAt(BotSupport.sw(bot), px, bot.getY(), pz)) {
+                     yaw = awayYaw + turn;
+                     break;
+                  }
+               }
+            }
+
+            BotSupport.run(server, "player " + name + " look " + String.format(Locale.ROOT, "%.1f", yaw) + " 0");
+         }
+
+         if (!bot.isSprinting()) {
+            BotSupport.run(server, "player " + name + " sprint");
+         }
+
+         return;
+      }
+
+      if (BotSupport.mendingWorn(bot) == 0 || BotSupport.mendDone(bot)) {
+         flog(f, "repair run finished");
+         endMend(server, name, f, false);
+         return;
+      }
+
+      int idx = BotSupport.findItemIndex(bot, Items.EXPERIENCE_BOTTLE);
+      if (idx < 0) {
+         flog(f, "repair run ended: out of experience bottles");
+         endMend(server, name, f, false);
+         return;
+      }
+
+      if (PvpBotMod.globalTick >= f.mendNextThrow) {
+         int slot = BotSupport.toHotbar(bot, idx, BotSupport.findWeaponSlot(bot));
+         if (slot < 0) {
+            endMend(server, name, f, false);
+            return;
+         }
+
+         if (slot != f.mendSlot) {
+            BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+            f.mendSlot = slot;
+         }
+
+         BotSupport.run(server, "player " + name + " look " + String.format(Locale.ROOT, "%.1f", awayYaw) + " 90");
+         BotSupport.run(server, "player " + name + " use once");
+         f.mendNextThrow = PvpBotMod.globalTick + Math.max(2, PvpBotMod.MEND_INTERVAL.asInt());
+      }
+   }
+
    static void startFlee(MinecraftServer server, String name, PvpBotMod.Fight f, int purpose) {
       BotSupport.run(server, "player " + name + " unsneak");
       BotSupport.run(server, "player " + name + " stop");
@@ -11741,6 +12241,7 @@ final class Gui {
    static final String TOUR_PAGE = "Tournament";
    static final String ARENA_PAGE = "Crowd & Ladder";
    static final String TEAMS_PAGE = "Team Tournament";
+   static final String KITS_PAGE = "Kits";
 
    private Gui() {
    }
@@ -11826,6 +12327,31 @@ final class Gui {
       player.openHandledScreen(new SimpleNamedScreenHandlerFactory((syncId, inv, p) -> new Gui.GuiMenu(syncId, start), Text.literal("PvpBot Crowd")));
    }
 
+   static void openKits(ServerPlayerEntity player) {
+      final int start = Math.max(0, pageNames().indexOf(KITS_PAGE));
+      player.openHandledScreen(new SimpleNamedScreenHandlerFactory((syncId, inv, p) -> new Gui.GuiMenu(syncId, start), Text.literal("PvpBot Kits")));
+   }
+
+   static boolean hasKitPicker(String page) {
+      return page.equals(FFA_PAGE) || page.equals(TOUR_PAGE) || page.equals(ARENA_PAGE) || page.equals(TEAMS_PAGE);
+   }
+
+   static String kitPickGet(String page) {
+      return page.equals(TOUR_PAGE) ? Kits.tourKit : page.equals(ARENA_PAGE) ? Kits.ladderKit : page.equals(TEAMS_PAGE) ? Kits.teamsKit : Kits.ffaKit;
+   }
+
+   static void kitPickSet(String page, String v) {
+      if (page.equals(TOUR_PAGE)) {
+         Kits.tourKit = v;
+      } else if (page.equals(ARENA_PAGE)) {
+         Kits.ladderKit = v;
+      } else if (page.equals(TEAMS_PAGE)) {
+         Kits.teamsKit = v;
+      } else {
+         Kits.ffaKit = v;
+      }
+   }
+
    static void openTournament(ServerPlayerEntity player) {
       final int start = Math.max(0, pageNames().indexOf(TOUR_PAGE));
       player.openHandledScreen(new SimpleNamedScreenHandlerFactory((syncId, inv, p) -> new Gui.GuiMenu(syncId, start), Text.literal("PvpBot Tournament")));
@@ -11868,6 +12394,8 @@ final class Gui {
       cat("Tournament", "tourtime", "tourfreeze", "tourbreak");
       cat("Crowd & Ladder", "arenacount", "crowdradius", "crowdchat", "arguechance", "arenagap", "arenaring", "specjump", "specswing", "speccheer", "cheerseconds", "arenabreak", "titleseconds");
       cat("Team Tournament");
+      cat("Kits");
+      catIcon("Kits", Items.CHEST);
       catIcon("Tournament", Items.TOTEM_OF_UNDYING);
       cat("Eating", "eat", "eatspread", "eatoddchance", "eatcount", "eatuntil", "hungereat", "eatfullspeed", "flee", "revenge", "eatknockback", "eatknockbackticks");
       cat(
@@ -11952,7 +12480,9 @@ final class Gui {
          "randomwebchance",
          "randomwebmindist",
          "randomwebmaxdist",
-         "randomwebcooldown"
+         "randomwebcooldown",
+         "predictwebchance",
+         "predictwebcooldown"
       );
       cat(
          "Potions & Items",
@@ -11968,6 +12498,11 @@ final class Gui {
          "durabilitythreshold",
          "expbottle",
          "expbottlethreshold",
+         "mendpieces",
+         "mendrunrange",
+         "mendstop",
+         "mendretry",
+         "mendinterval",
          "massmax"
       );
       cat(
@@ -11983,9 +12518,9 @@ final class Gui {
          "precisionlock"
       );
       cat("Team & FFA", "callouts", "callpop", "callcrit", "callarmor", "callfood", "callcrithearts", "callcritseconds", "callarmorseconds", "callfoodrun", "tactics", "tacgang", "tachelp", "tacbalance", "focuschance", "focusmin", "focusmax", "taunts", "ffaleave", "opsonly", "voidaware");
-      cat("Wind & Mace", "windclimb", "windclimbheight", "windmacechance", "windmacehearts", "windmacecooldown", "windjumpdelay", "windjumpchance", "macetrade", "maceoutnumbered", "maceoutnumberedcount", "maceoutnumberedboost", "healabort", "windcounter", "windcounterchance", "windcounterrange", "windcountercooldown", "macefear", "macefearchance", "macefearrun", "macefearradius", "macefeardist", "fallshieldchance");
+      cat("Wind & Mace", "windclimb", "windclimbheight", "windmacechance", "windmacehearts", "windmacecooldown", "finishmacechance", "adapthits", "adaptmacechance", "adaptmacemin", "adaptmacemax", "fallbackchance", "windjumpdelay", "windjumpchance", "macetrade", "maceoutnumbered", "maceoutnumberedcount", "maceoutnumberedboost", "healabort", "windcounter", "windcounterchance", "windcounterrange", "windcountercooldown", "macefear", "macefearchance", "macefearrun", "macefearradius", "macefeardist", "fallshieldchance");
       cat("Mace Pressure", "maceretry", "maceretrymax", "macechaingap", "macepressure", "macepressurerange", "webmace", "macekeepdist", "maceaimerror", "macemistake", "windjumplatechance", "windjumplatemax", "divelead");
-      cat("Sword Tech", "jumpresetwindow", "jumpresetrange", "strafepredict", "strafelead", "prep", "prepgapples", "prepdist", "prepaxe", "baitchance", "baitticks", "baitcooldown", "pearlaggro", "pearlaggromin", "pearlaggrocd", "pearlaggrohearts");
+      cat("Sword Tech", "jumpresetwindow", "jumpresetrange", "lowfightchance", "prep", "prepgapples", "prepdist", "prepaxe", "baitchance", "baitticks", "baitcooldown", "pearlaggro", "pearlaggromin", "pearlaggrocd", "pearlaggrohearts");
       cat("Elytra", "elytrachance", "elytramaxglides", "elytraburstchance", "elytradisengage", "elytrareach", "elytradurability", "elytraescapechance", "elytraescapedist", "elytrachasechance", "elytrachasedist", "elytrachaseclose", "elytraboosts", "elytratakeoff");
       cat("Pathfinding", "pathfind", "pathmode", "pathrange", "pathnodes", "pathreplan", "pathbudget", "pathdrop", "pathwiden", "pathdeadmem", "pathcloserange", "pathdelay", "gotonodes", "gotobudget", "pathhop");
       cat("FFA & Loot", "ffaloot", "ffafreeze", "ffalootrange", "ffalootmax", "ffamingear", "ffabreakchests", "lootchestrichness", "lootchestfillrange");
@@ -12113,6 +12648,7 @@ final class Gui {
       private final Inventory container = new SimpleInventory(54);
       private int page;
       private boolean indexMode;
+      private String delConfirm;
 
       GuiMenu(int syncId) {
          this(syncId, 0);
@@ -12179,6 +12715,10 @@ final class Gui {
                      this.handlePresetClick(slotId);
                   } else if (pageName.equals(Gui.TEST_PAGE)) {
                      this.handleTestClick(sp, slotId);
+                  } else if (pageName.equals(Gui.KITS_PAGE)) {
+                     this.handleKitsAction(sp, slotId, rightClick, shift);
+                  } else if (slotId == 44 && Gui.hasKitPicker(pageName)) {
+                     Gui.kitPickSet(pageName, Kits.cyclePick(Gui.kitPickGet(pageName), rightClick));
                   } else if (pageName.equals(Gui.FFA_PAGE) && slotId < 9) {
                      this.handleFfaAction(sp, slotId, rightClick);
                   } else if (pageName.equals(Gui.TOUR_PAGE) && slotId < 9) {
@@ -12301,6 +12841,71 @@ final class Gui {
 
          if (err != null) {
             sp.sendMessage(Text.literal("[Arena] " + err));
+         }
+      }
+
+      private void handleKitsAction(ServerPlayerEntity sp, int slotId, boolean rightClick, boolean shift) {
+         MinecraftServer server = BotSupport.sw(sp).getServer();
+         if (slotId == 0) {
+            this.delConfirm = null;
+            Kits.openEditor(sp, Kits.firstFreeName(), rightClick ? Tournament.snapshot(sp) : null);
+         } else if (slotId == 1) {
+            this.delConfirm = null;
+            String n = Kits.firstFreeName();
+            Kits.STORE.put(n, Tournament.snapshot(sp));
+            Kits.save(server);
+            sp.sendMessage(Text.literal("Saved your inventory as kit " + n + "."));
+         } else if (slotId == 2) {
+            PvpBotMod.setOptValue(PvpBotMod.KIT_RESPAWN, PvpBotMod.KIT_RESPAWN.on() ? 0.0 : 1.0);
+         } else if (slotId == 3) {
+            PvpBotMod.setOptValue(PvpBotMod.KIT_REPAIR, PvpBotMod.KIT_REPAIR.on() ? 0.0 : 1.0);
+         } else if (slotId >= 9 && slotId < 45) {
+            List<String> names = new ArrayList<>(Kits.STORE.keySet());
+            int idx = slotId - 9;
+            if (idx < names.size()) {
+               String name = names.get(idx);
+               if (shift) {
+                  if (name.equals(this.delConfirm)) {
+                     Kits.STORE.remove(name);
+                     Kits.save(server);
+                     this.delConfirm = null;
+                     sp.sendMessage(Text.literal("Deleted kit " + name + "."));
+                  } else {
+                     this.delConfirm = name;
+                     sp.sendMessage(Text.literal("Shift-click kit " + name + " again to delete it."));
+                  }
+               } else if (rightClick) {
+                  this.delConfirm = null;
+                  Kits.openEditor(sp, name, Kits.STORE.get(name));
+               } else {
+                  this.delConfirm = null;
+                  List<ServerPlayerEntity> bots = Kits.onlineBots(server);
+                  for (ServerPlayerEntity b : bots) {
+                     Kits.give(server, b, name, true);
+                  }
+
+                  sp.sendMessage(Text.literal(bots.isEmpty() ? "No bots are online." : "Gave kit " + name + " to " + bots.size() + " bot(s)."));
+               }
+            }
+         }
+      }
+
+      private void renderKits() {
+         this.container.setStack(0, labelItem(Items.EMERALD, "\u00a7aNew kit", List.of("\u00a77Left: empty editor", "\u00a77Right: editor filled with your inventory")));
+         this.container.setStack(1, labelItem(Items.CHEST, "\u00a7bSave my inventory as a kit", List.of("\u00a77Hotbar, inventory, armor and offhand, exactly as they are.", "\u00a77/pvpbot kit save <name>")));
+         this.container.setStack(2, labelItem(PvpBotMod.KIT_RESPAWN.on() ? Items.LIME_DYE : Items.RED_DYE, (PvpBotMod.KIT_RESPAWN.on() ? "\u00a7a" : "\u00a7c") + "kitrespawn = " + PvpBotMod.KIT_RESPAWN.show(), List.of("\u00a77" + PvpBotMod.KIT_RESPAWN.desc, "\u00a7eClick: toggle")));
+         this.container.setStack(3, labelItem(PvpBotMod.KIT_REPAIR.on() ? Items.LIME_DYE : Items.RED_DYE, (PvpBotMod.KIT_REPAIR.on() ? "\u00a7a" : "\u00a7c") + "kitrepair = " + PvpBotMod.KIT_REPAIR.show(), List.of("\u00a77" + PvpBotMod.KIT_REPAIR.desc, "\u00a7eClick: toggle")));
+         this.container.setStack(8, labelItem(Items.CLOCK, "\u00a7eKits: " + Kits.STORE.size(), List.of("\u00a77Kits are global: any bot, team or mode can use them.", "\u00a77Stored in config/pvpbotcmd_kits.json", "\u00a77/pvpbot kit give <kit> [bot | team <team>]")));
+         List<String> names = new ArrayList<>(Kits.STORE.keySet());
+         for (int i = 0; i < names.size() && i < 36; i++) {
+            String name = names.get(i);
+            Tournament.Kit k = Kits.STORE.get(name);
+            List<String> lore = new ArrayList<>();
+            lore.add("\u00a77" + Kits.itemCount(k) + " items");
+            lore.add("\u00a7eLeft: give to ALL bots (wipes them first)");
+            lore.add("\u00a7eRight: open the editor");
+            lore.add(name.equals(this.delConfirm) ? "\u00a7cShift-click again to DELETE" : "\u00a77Shift-click: delete (asks once)");
+            this.container.setStack(9 + i, labelItem(Kits.iconOf(k), "\u00a7f" + name, lore));
          }
       }
 
@@ -12506,6 +13111,16 @@ final class Gui {
                this.renderTeams();
             }
 
+            if (pageName.equals(Gui.KITS_PAGE)) {
+               this.renderKits();
+            }
+
+            if (Gui.hasKitPicker(pageName)) {
+               String pick = Gui.kitPickGet(pageName);
+               boolean missing = pick != null && !Kits.STORE.containsKey(Kits.key(pick));
+               this.container.setStack(44, labelItem(Items.CHEST, "\u00a7bKit: " + (pick == null ? "(none: current gear)" : pick + (missing ? " (missing)" : "")), List.of("\u00a77With a kit every round / the match start regears from it.", "\u00a77With none, the bots' current gear is saved as before.", "\u00a7eLeft: next kit   Right: previous kit")));
+            }
+
             if (pageName.equals(Gui.FFA_PAGE)) {
                base = 9;
                this.container.setStack(0, labelItem(Items.EMERALD, "\u00a7aStart FFA match", List.of("\u00a77Freeze, loot chests, gear up, then fight.", "\u00a77Uses every PvP bot and survival player.")));
@@ -12567,7 +13182,7 @@ final class Gui {
 }
 
 /**
- * Per-bot tiers (LT5 .. HT1). There are no kits: a bot has one tier for each of Sword, SMP, Mace, ElytraMace and Axe,
+ * Per-bot tiers (LT5 .. HT1). The tier kinds are called "tier modes" in the UI (kits are the separate /pvpbot kit system): a bot has one tier for each of Sword, SMP, Mace, ElytraMace and Axe,
  * and the items the bot carries decide which of those tiers apply (several can apply at once).
  *
  * How it works: while one bot is being thought about (Fighting.tickFights), enter(bot) swaps the option values of
@@ -13033,7 +13648,6 @@ final class Tiers {
             ex(m, PvpBotMod.WEBTRAP_CHANCE, 10, 75, q);
             ex(m, PvpBotMod.COCOON, 0, 1, q);
             ex(m, PvpBotMod.WINDCOUNTER_CHANCE, 10, 70, q);
-            ex(m, PvpBotMod.FALL_SHIELD_CHANCE, 20, 90, q);
             ex(m, PvpBotMod.POSTSWING_SHIELD_CHANCE, 20, 90, q);
             ex(m, PvpBotMod.EAT_FULL_SPEED, 0, 1, q);
             ex(m, PvpBotMod.EAT_KNOCKBACK, 0, 1, q);
@@ -13069,7 +13683,6 @@ final class Tiers {
             ex(m, PvpBotMod.STUN_SLAM_CHANCE, 10, 95, q);
             ex(m, PvpBotMod.SHIELD_CHANCE, 20, 90, q);
             ex(m, PvpBotMod.POSTSWING_SHIELD_CHANCE, 20, 90, q);
-            ex(m, PvpBotMod.FALL_SHIELD_CHANCE, 20, 85, q);
             ex(m, PvpBotMod.CRIT_CHANCE, 15, 80, q);
             ex(m, PvpBotMod.MISS_CHANCE, 15, 2, q);
             ex(m, PvpBotMod.AIM, 6, 2, q);
@@ -13480,7 +14093,7 @@ final class Tiers {
       ServerCommandSource src = ctx.getSource();
       String kit = kitRaw.toLowerCase(Locale.ROOT);
       if (!isTierKit(kit)) {
-         src.sendError(Text.literal("Tiers exist only for: " + String.join(", ", TIER_KITS)));
+         src.sendError(Text.literal("Tier modes exist only for: " + String.join(", ", TIER_KITS)));
          return 0;
       }
 
@@ -13648,6 +14261,8 @@ final class Tiers {
          } else if (slot == 48) {
             int n = randomizeAll();
             sp.sendMessage(Text.literal("Gave " + n + " bot(s) random tiers between " + TIER_NAMES[randomMin] + " and " + TIER_NAMES[randomMax] + "."));
+         } else if (slot == 50) {
+            Gui.openKits(sp);
          } else if (slot == 51) {
             Gui.open(sp);
          }
@@ -13811,6 +14426,7 @@ final class Tiers {
          this.container.setStack(47, label(Items.GOLD_INGOT, S + "fRandom range: highest = " + tierText(randomMax), List.of(S + "eLeft: higher   Right: lower")));
          this.container.setStack(48, label(Items.ENDER_EYE, S + "dRandomize ALL bots", List.of(S + "7Every tier of every bot gets a random tier", S + "7between " + tierText(randomMin) + S + "7 and " + tierText(randomMax) + S + "7.", S + "7/pvpbot tiers random [min] [max]")));
          this.container.setStack(49, label(Items.BOOK, S + "ePage " + (this.pickerPage + 1) + " of " + pageCount, List.of(S + "7" + bots.size() + " bot(s)", S + "7No tier set = the global difficulty is used")));
+         this.container.setStack(50, label(Items.CHEST, S + "6Kits", List.of(S + "7Save, edit and give kits", S + "7/pvpbot kit list")));
          this.container.setStack(51, label(Items.COMPARATOR, S + "bSettings menu", List.of(S + "7Open /pvpbot gui")));
          this.container.setStack(53, label(Items.ARROW, S + "fNext page ->", List.of()));
       }
@@ -13916,6 +14532,867 @@ final class Tiers {
    }
 }
 
+
+/**
+ * Global kits. A kit is the 36 inventory slots (hotbar order kept), the 4 armor pieces and the offhand, saved with
+ * their exact item data in config/pvpbotcmd_kits.json. There are no preset kits: the list starts empty.
+ * "give" always wipes the target first (inventory, armor, offhand), heals it, clears its effects and selects its weapon.
+ */
+final class Kits {
+   static final Map<String, Tournament.Kit> STORE = new TreeMap<>();
+   /** bot name -> kit key it was last given (re-applied on respawn / rejoin when kitrespawn is on). */
+   static final Map<String, String> ASSIGNED = new HashMap<>();
+   private static final Map<String, ServerPlayerEntity> SEEN = new HashMap<>();
+   private static final Map<String, Integer> GONE = new HashMap<>();
+   /** optional kit pickers of the GUI pages (null = snapshot the current inventory as before). */
+   static String tourKit;
+   static String ladderKit;
+   static String teamsKit;
+   static String ffaKit;
+   static final SuggestionProvider<ServerCommandSource> KIT_NAMES = (ctx, builder) -> CommandSource.suggestMatching(STORE.keySet(), builder);
+   private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+
+   private Kits() {
+   }
+
+   static Path file() {
+      return FabricLoader.getInstance().getConfigDir().resolve("pvpbotcmd_kits.json");
+   }
+
+   static Path exportDir() {
+      return FabricLoader.getInstance().getConfigDir().resolve("kits");
+   }
+
+   static String key(String name) {
+      return name == null ? "" : name.trim().toLowerCase(Locale.ROOT);
+   }
+
+   static boolean validName(String name) {
+      return name != null && name.matches("[A-Za-z0-9_\\-]{1,24}");
+   }
+
+   // ---------------------------------------------------------------- storage
+
+   static JsonElement enc(MinecraftServer server, ItemStack st) {
+      try {
+         DynamicOps<JsonElement> ops = server.getRegistryManager().getOps(JsonOps.INSTANCE);
+         return ItemStack.OPTIONAL_CODEC.encodeStart(ops, st).result().orElse(new JsonObject());
+      } catch (Exception e) {
+         return new JsonObject();
+      }
+   }
+
+   static ItemStack dec(MinecraftServer server, JsonElement el) {
+      try {
+         DynamicOps<JsonElement> ops = server.getRegistryManager().getOps(JsonOps.INSTANCE);
+         return ItemStack.OPTIONAL_CODEC.parse(ops, el).result().orElse(ItemStack.EMPTY);
+      } catch (Exception e) {
+         return ItemStack.EMPTY;
+      }
+   }
+
+   static JsonArray toJson(MinecraftServer server, Tournament.Kit k) {
+      JsonArray a = new JsonArray();
+      for (int i = 0; i < 36; i++) {
+         a.add(enc(server, k.main[i]));
+      }
+
+      for (int i = 0; i < 4; i++) {
+         a.add(enc(server, k.armor[i]));
+      }
+
+      a.add(enc(server, k.off));
+      return a;
+   }
+
+   static Tournament.Kit fromJson(MinecraftServer server, JsonArray a) {
+      Tournament.Kit k = new Tournament.Kit();
+      for (int i = 0; i < 36; i++) {
+         k.main[i] = i < a.size() ? dec(server, a.get(i)) : ItemStack.EMPTY;
+      }
+
+      for (int i = 0; i < 4; i++) {
+         k.armor[i] = 36 + i < a.size() ? dec(server, a.get(36 + i)) : ItemStack.EMPTY;
+      }
+
+      k.off = a.size() > 40 ? dec(server, a.get(40)) : ItemStack.EMPTY;
+      return k;
+   }
+
+   static void load(MinecraftServer server) {
+      STORE.clear();
+      Path f = file();
+      if (!Files.exists(f)) {
+         return;
+      }
+
+      try {
+         JsonObject root = JsonParser.parseString(Files.readString(f)).getAsJsonObject();
+         for (Entry<String, JsonElement> e : root.entrySet()) {
+            if (e.getValue().isJsonArray()) {
+               STORE.put(key(e.getKey()), fromJson(server, e.getValue().getAsJsonArray()));
+            }
+         }
+      } catch (Exception e) {
+         System.out.println("[pvpbotcmd] could not read " + f.getFileName() + ": " + e);
+      }
+   }
+
+   static void save(MinecraftServer server) {
+      try {
+         JsonObject root = new JsonObject();
+         for (Entry<String, Tournament.Kit> e : STORE.entrySet()) {
+            root.add(e.getKey(), toJson(server, e.getValue()));
+         }
+
+         Files.createDirectories(file().getParent());
+         Files.writeString(file(), GSON.toJson(root));
+      } catch (Exception e) {
+         System.out.println("[pvpbotcmd] could not save " + file().getFileName() + ": " + e);
+      }
+   }
+
+   static void clearMemory() {
+      STORE.clear();
+      ASSIGNED.clear();
+      SEEN.clear();
+      GONE.clear();
+      tourKit = null;
+      ladderKit = null;
+      teamsKit = null;
+      ffaKit = null;
+   }
+
+   // ---------------------------------------------------------------- kit helpers
+
+   static Tournament.Kit copyOf(Tournament.Kit k) {
+      Tournament.Kit c = new Tournament.Kit();
+      for (int i = 0; i < 36; i++) {
+         c.main[i] = k.main[i].copy();
+      }
+
+      for (int i = 0; i < 4; i++) {
+         c.armor[i] = k.armor[i].copy();
+      }
+
+      c.off = k.off.copy();
+      return c;
+   }
+
+   /** a copy for handing out: full durability when kitrepair is on. */
+   static Tournament.Kit forGiving(Tournament.Kit k) {
+      Tournament.Kit c = copyOf(k);
+      if (PvpBotMod.KIT_REPAIR.on()) {
+         for (ItemStack s : c.main) {
+            repair(s);
+         }
+
+         for (ItemStack s : c.armor) {
+            repair(s);
+         }
+
+         repair(c.off);
+      }
+
+      return c;
+   }
+
+   static void repair(ItemStack s) {
+      if (!s.isEmpty() && s.isDamageable()) {
+         s.setDamage(0);
+      }
+   }
+
+   static int itemCount(Tournament.Kit k) {
+      int n = 0;
+      for (ItemStack s : k.main) {
+         if (!s.isEmpty()) {
+            n++;
+         }
+      }
+
+      for (ItemStack s : k.armor) {
+         if (!s.isEmpty()) {
+            n++;
+         }
+      }
+
+      return n + (k.off.isEmpty() ? 0 : 1);
+   }
+
+   static Item iconOf(Tournament.Kit k) {
+      for (ItemStack s : k.main) {
+         if (s.isOf(Items.MACE)) {
+            return Items.MACE;
+         }
+      }
+
+      for (ItemStack s : k.main) {
+         if (!s.isEmpty() && (s.isIn(ItemTags.SWORDS) || s.isIn(ItemTags.AXES))) {
+            return s.getItem();
+         }
+      }
+
+      for (ItemStack s : k.armor) {
+         if (!s.isEmpty()) {
+            return s.getItem();
+         }
+      }
+
+      return Items.CHEST;
+   }
+
+   /** the kit to use for a round / match: a copy of the named kit, or a snapshot of the bot's current gear. */
+   static Tournament.Kit kitOrSnapshot(ServerPlayerEntity bot, String kitKey) {
+      Tournament.Kit k = kitKey == null ? null : STORE.get(key(kitKey));
+      return k != null ? forGiving(k) : Tournament.snapshot(bot);
+   }
+
+   static String firstFreeName() {
+      for (int i = 1; i < 1000; i++) {
+         if (!STORE.containsKey("kit" + i)) {
+            return "kit" + i;
+         }
+      }
+
+      return "kit" + System.currentTimeMillis();
+   }
+
+   static String cyclePick(String cur, boolean back) {
+      List<String> names = new ArrayList<>(STORE.keySet());
+      if (names.isEmpty()) {
+         return null;
+      }
+
+      int i = cur == null ? -1 : names.indexOf(key(cur));
+      int next = i + (back ? -1 : 1);
+      if (cur == null && back) {
+         next = names.size() - 1;
+      }
+
+      return next < 0 || next >= names.size() ? null : names.get(next);
+   }
+
+   // ---------------------------------------------------------------- give / clear
+
+   /** wipes the bot and gives it the kit; assign = remember it for respawn. */
+   static boolean give(MinecraftServer server, ServerPlayerEntity bot, String kitKey, boolean assign) {
+      Tournament.Kit k = STORE.get(key(kitKey));
+      if (k == null || bot == null) {
+         return false;
+      }
+
+      String name = bot.getName().getString();
+      PvpBotMod.Fight f = PvpBotMod.FIGHTS.get(name);
+      BotSupport.run(server, "player " + name + " stop");
+      if (f != null) {
+         f.reset();
+      }
+
+      Tournament.restoreKit(server, bot, forGiving(k));
+      int w = BotSupport.findWeaponSlot(bot);
+      if (w >= 0) {
+         BotSupport.run(server, "player " + name + " hotbar " + (w + 1));
+      }
+
+      if (assign) {
+         ASSIGNED.put(name, key(kitKey));
+         SEEN.put(name, bot);
+         GONE.remove(name);
+      }
+
+      return true;
+   }
+
+   static void wipe(MinecraftServer server, ServerPlayerEntity bot) {
+      String name = bot.getName().getString();
+      PvpBotMod.Fight f = PvpBotMod.FIGHTS.get(name);
+      if (f != null) {
+         f.reset();
+      }
+
+      bot.getInventory().clear();
+      for (EquipmentSlot s : new EquipmentSlot[]{EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET, EquipmentSlot.OFFHAND}) {
+         bot.equipStack(s, ItemStack.EMPTY);
+      }
+
+      ASSIGNED.remove(name);
+      SEEN.remove(name);
+   }
+
+   static List<ServerPlayerEntity> onlineBots(MinecraftServer server) {
+      List<ServerPlayerEntity> out = new ArrayList<>();
+      for (String n : new ArrayList<>(PvpBotMod.BOTS)) {
+         ServerPlayerEntity p = server.getPlayerManager().getPlayer(n);
+         if (p != null) {
+            out.add(p);
+         }
+      }
+
+      return out;
+   }
+
+   static List<ServerPlayerEntity> teamBots(MinecraftServer server, String team) {
+      List<ServerPlayerEntity> out = new ArrayList<>();
+      for (ServerPlayerEntity p : onlineBots(server)) {
+         String t = BotSupport.teamName(p);
+         if (t != null && t.equalsIgnoreCase(team)) {
+            out.add(p);
+         }
+      }
+
+      return out;
+   }
+
+   /** called every tick: bots with an assigned kit get it back after a respawn or rejoin. */
+   static void tick(MinecraftServer server) {
+      if (ASSIGNED.isEmpty() || PvpBotMod.globalTick % 5 != 0) {
+         return;
+      }
+
+      for (Entry<String, String> e : new ArrayList<>(ASSIGNED.entrySet())) {
+         String name = e.getKey();
+         ServerPlayerEntity p = server.getPlayerManager().getPlayer(name);
+         if (p == null) {
+            int since = GONE.computeIfAbsent(name, n -> PvpBotMod.globalTick);
+            if (PvpBotMod.globalTick - since > 6000) {
+               ASSIGNED.remove(name);
+               SEEN.remove(name);
+               GONE.remove(name);
+            }
+
+            continue;
+         }
+
+         GONE.remove(name);
+         ServerPlayerEntity prev = SEEN.put(name, p);
+         if (prev != null && prev != p && PvpBotMod.KIT_RESPAWN.on() && p.isAlive()) {
+            give(server, p, e.getValue(), false);
+         }
+      }
+   }
+
+   // ---------------------------------------------------------------- commands
+
+   private static void say(CommandContext<ServerCommandSource> ctx, String text) {
+      ctx.getSource().sendFeedback(() -> Text.literal(text), false);
+   }
+
+   private static int fail(CommandContext<ServerCommandSource> ctx, String text) {
+      ctx.getSource().sendError(Text.literal(text));
+      return 0;
+   }
+
+   private static String arg(CommandContext<ServerCommandSource> ctx, String n) {
+      return key(StringArgumentType.getString(ctx, n));
+   }
+
+   private static int saveFrom(CommandContext<ServerCommandSource> ctx, ServerPlayerEntity from, String raw, String who) {
+      if (!validName(raw)) {
+         return fail(ctx, "Kit names are 1-24 letters, digits, _ or -.");
+      }
+
+      MinecraftServer server = ctx.getSource().getServer();
+      boolean had = STORE.containsKey(key(raw));
+      STORE.put(key(raw), Tournament.snapshot(from));
+      save(server);
+      say(ctx, (had ? "Replaced" : "Saved") + " kit " + key(raw) + " from " + who + " (" + itemCount(STORE.get(key(raw))) + " items).");
+      return 1;
+   }
+
+   private static int giveCmd(CommandContext<ServerCommandSource> ctx, String kit, List<ServerPlayerEntity> bots, String what) {
+      if (!STORE.containsKey(kit)) {
+         return fail(ctx, "No kit named " + kit + ". See /pvpbot kit list.");
+      }
+
+      if (bots.isEmpty()) {
+         return fail(ctx, "No bots found" + (what.isEmpty() ? "." : " (" + what + ")."));
+      }
+
+      MinecraftServer server = ctx.getSource().getServer();
+      for (ServerPlayerEntity b : bots) {
+         give(server, b, kit, true);
+      }
+
+      say(ctx, "Gave kit " + kit + " to " + bots.size() + " bot(s).");
+      return bots.size();
+   }
+
+   static void register(LiteralArgumentBuilder<ServerCommandSource> root) {
+      root.then(
+         CommandManager.literal("kit")
+            .then(CommandManager.literal("save").then(CommandManager.argument("name", StringArgumentType.word()).executes(ctx -> {
+               ServerPlayerEntity me = ctx.getSource().getPlayerOrThrow();
+               return saveFrom(ctx, me, StringArgumentType.getString(ctx, "name"), "your inventory");
+            })))
+            .then(
+               CommandManager.literal("savebot")
+                  .then(
+                     CommandManager.argument("bot", StringArgumentType.word())
+                        .suggests(PvpBotMod.BOT_NAMES)
+                        .then(CommandManager.argument("name", StringArgumentType.word()).executes(ctx -> {
+                           String bn = StringArgumentType.getString(ctx, "bot");
+                           ServerPlayerEntity b = ctx.getSource().getServer().getPlayerManager().getPlayer(bn);
+                           if (b == null) {
+                              return fail(ctx, "No player named " + bn + " is online.");
+                           }
+
+                           return saveFrom(ctx, b, StringArgumentType.getString(ctx, "name"), bn);
+                        }))
+                  )
+            )
+            .then(
+               CommandManager.literal("delete")
+                  .then(CommandManager.argument("name", StringArgumentType.word()).suggests(KIT_NAMES).executes(ctx -> {
+                     String k = arg(ctx, "name");
+                     if (STORE.remove(k) == null) {
+                        return fail(ctx, "No kit named " + k + ".");
+                     }
+
+                     save(ctx.getSource().getServer());
+                     say(ctx, "Deleted kit " + k + ".");
+                     return 1;
+                  }))
+            )
+            .then(
+               CommandManager.literal("rename")
+                  .then(
+                     CommandManager.argument("old", StringArgumentType.word())
+                        .suggests(KIT_NAMES)
+                        .then(CommandManager.argument("new", StringArgumentType.word()).executes(ctx -> {
+                           String o = arg(ctx, "old");
+                           String n = arg(ctx, "new");
+                           if (!STORE.containsKey(o)) {
+                              return fail(ctx, "No kit named " + o + ".");
+                           }
+
+                           if (!validName(n) || STORE.containsKey(n)) {
+                              return fail(ctx, "The new name is invalid or already taken.");
+                           }
+
+                           STORE.put(n, STORE.remove(o));
+                           for (Entry<String, String> e : ASSIGNED.entrySet()) {
+                              if (e.getValue().equals(o)) {
+                                 e.setValue(n);
+                              }
+                           }
+
+                           save(ctx.getSource().getServer());
+                           say(ctx, "Renamed kit " + o + " to " + n + ".");
+                           return 1;
+                        }))
+                  )
+            )
+            .then(CommandManager.literal("list").executes(ctx -> {
+               if (STORE.isEmpty()) {
+                  say(ctx, "No kits yet. Make one with /pvpbot kit save <name>, or open /pvpbot gui -> Kits.");
+                  return 1;
+               }
+
+               for (Entry<String, Tournament.Kit> e : STORE.entrySet()) {
+                  say(ctx, e.getKey() + " - " + itemCount(e.getValue()) + " items");
+               }
+
+               return STORE.size();
+            }))
+            .then(
+               CommandManager.literal("show")
+                  .then(CommandManager.argument("name", StringArgumentType.word()).suggests(KIT_NAMES).executes(ctx -> {
+                     String k = arg(ctx, "name");
+                     Tournament.Kit kit = STORE.get(k);
+                     if (kit == null) {
+                        return fail(ctx, "No kit named " + k + ".");
+                     }
+
+                     say(ctx, "Kit " + k + ":");
+                     String[] an = new String[]{"helmet", "chestplate", "leggings", "boots"};
+                     for (int i = 0; i < 4; i++) {
+                        if (!kit.armor[i].isEmpty()) {
+                           say(ctx, " " + an[i] + ": " + describe(kit.armor[i]));
+                        }
+                     }
+
+                     if (!kit.off.isEmpty()) {
+                        say(ctx, " offhand: " + describe(kit.off));
+                     }
+
+                     for (int i = 0; i < 36; i++) {
+                        if (!kit.main[i].isEmpty()) {
+                           say(ctx, " " + (i < 9 ? "hotbar " + (i + 1) : "slot " + i) + ": " + describe(kit.main[i]));
+                        }
+                     }
+
+                     return 1;
+                  }))
+            )
+            .then(
+               CommandManager.literal("copy")
+                  .then(
+                     CommandManager.argument("from", StringArgumentType.word())
+                        .suggests(KIT_NAMES)
+                        .then(CommandManager.argument("to", StringArgumentType.word()).executes(ctx -> {
+                           String a = arg(ctx, "from");
+                           String b = arg(ctx, "to");
+                           if (!STORE.containsKey(a)) {
+                              return fail(ctx, "No kit named " + a + ".");
+                           }
+
+                           if (!validName(b) || STORE.containsKey(b)) {
+                              return fail(ctx, "The new name is invalid or already taken.");
+                           }
+
+                           STORE.put(b, copyOf(STORE.get(a)));
+                           save(ctx.getSource().getServer());
+                           say(ctx, "Copied kit " + a + " to " + b + ".");
+                           return 1;
+                        }))
+                  )
+            )
+            .then(
+               CommandManager.literal("export")
+                  .then(CommandManager.argument("name", StringArgumentType.word()).suggests(KIT_NAMES).executes(ctx -> {
+                     String k = arg(ctx, "name");
+                     Tournament.Kit kit = STORE.get(k);
+                     if (kit == null) {
+                        return fail(ctx, "No kit named " + k + ".");
+                     }
+
+                     try {
+                        Files.createDirectories(exportDir());
+                        Files.writeString(exportDir().resolve(k + ".txt"), GSON.toJson(toJson(ctx.getSource().getServer(), kit)));
+                     } catch (Exception e) {
+                        return fail(ctx, "Could not write the file: " + e.getMessage());
+                     }
+
+                     say(ctx, "Exported to config/kits/" + k + ".txt");
+                     return 1;
+                  }))
+            )
+            .then(
+               CommandManager.literal("import")
+                  .then(CommandManager.argument("name", StringArgumentType.word()).executes(ctx -> {
+                     String k = arg(ctx, "name");
+                     Path p = exportDir().resolve(k + ".txt");
+                     if (!validName(k) || !Files.exists(p)) {
+                        return fail(ctx, "No file config/kits/" + k + ".txt");
+                     }
+
+                     try {
+                        JsonArray a = JsonParser.parseString(Files.readString(p)).getAsJsonArray();
+                        STORE.put(k, fromJson(ctx.getSource().getServer(), a));
+                     } catch (Exception e) {
+                        return fail(ctx, "That file is not a kit export: " + e.getMessage());
+                     }
+
+                     save(ctx.getSource().getServer());
+                     say(ctx, "Imported kit " + k + " (" + itemCount(STORE.get(k)) + " items).");
+                     return 1;
+                  }))
+            )
+            .then(
+               ((LiteralArgumentBuilder<ServerCommandSource>)CommandManager.literal("clear")
+                     .executes(ctx -> clearCmd(ctx, onlineBots(ctx.getSource().getServer()), "all bots")))
+                  .then(
+                     CommandManager.literal("team")
+                        .then(CommandManager.argument("team", StringArgumentType.word()).executes(ctx -> {
+                           String t = StringArgumentType.getString(ctx, "team");
+                           return clearCmd(ctx, teamBots(ctx.getSource().getServer(), t), "team " + t);
+                        }))
+                  )
+                  .then(
+                     CommandManager.argument("bot", StringArgumentType.word())
+                        .suggests(PvpBotMod.BOT_NAMES)
+                        .executes(ctx -> {
+                           String bn = StringArgumentType.getString(ctx, "bot");
+                           ServerPlayerEntity b = ctx.getSource().getServer().getPlayerManager().getPlayer(bn);
+                           return clearCmd(ctx, b == null ? List.of() : List.of(b), bn);
+                        })
+                  )
+            )
+            .then(
+               CommandManager.literal("give")
+                  .then(
+                     ((RequiredArgumentBuilder<ServerCommandSource, String>)CommandManager.argument("name", StringArgumentType.word())
+                           .suggests(KIT_NAMES)
+                           .executes(ctx -> giveCmd(ctx, arg(ctx, "name"), onlineBots(ctx.getSource().getServer()), "")))
+                        .then(
+                           CommandManager.literal("team")
+                              .then(CommandManager.argument("team", StringArgumentType.word()).executes(ctx -> {
+                                 String t = StringArgumentType.getString(ctx, "team");
+                                 return giveCmd(ctx, arg(ctx, "name"), teamBots(ctx.getSource().getServer(), t), "team " + t);
+                              }))
+                        )
+                        .then(
+                           CommandManager.argument("bot", StringArgumentType.word())
+                              .suggests(PvpBotMod.BOT_NAMES)
+                              .executes(ctx -> {
+                                 String bn = StringArgumentType.getString(ctx, "bot");
+                                 ServerPlayerEntity b = ctx.getSource().getServer().getPlayerManager().getPlayer(bn);
+                                 return giveCmd(ctx, arg(ctx, "name"), b == null ? List.of() : List.of(b), bn);
+                              })
+                        )
+                  )
+            )
+            .then(
+               CommandManager.literal("random")
+                  .then(CommandManager.argument("kits", StringArgumentType.greedyString()).executes(ctx -> {
+                     List<String> pool = new ArrayList<>();
+                     for (String s : StringArgumentType.getString(ctx, "kits").trim().split("\\s+")) {
+                        if (!STORE.containsKey(key(s))) {
+                           return fail(ctx, "No kit named " + s + ".");
+                        }
+
+                        pool.add(key(s));
+                     }
+
+                     MinecraftServer server = ctx.getSource().getServer();
+                     List<ServerPlayerEntity> bots = onlineBots(server);
+                     if (bots.isEmpty() || pool.isEmpty()) {
+                        return fail(ctx, "No bots found.");
+                     }
+
+                     for (ServerPlayerEntity b : bots) {
+                        give(server, b, pool.get(ThreadLocalRandom.current().nextInt(pool.size())), true);
+                     }
+
+                     say(ctx, "Gave a random kit out of " + pool.size() + " to " + bots.size() + " bot(s).");
+                     return bots.size();
+                  }))
+            )
+      );
+   }
+
+   private static int clearCmd(CommandContext<ServerCommandSource> ctx, List<ServerPlayerEntity> bots, String what) {
+      if (bots.isEmpty()) {
+         return fail(ctx, "No bots found (" + what + ").");
+      }
+
+      for (ServerPlayerEntity b : bots) {
+         wipe(ctx.getSource().getServer(), b);
+      }
+
+      say(ctx, "Cleared the gear of " + bots.size() + " bot(s) (" + what + ").");
+      return bots.size();
+   }
+
+   static String describe(ItemStack s) {
+      String id = Registries.ITEM.getId(s.getItem()).getPath();
+      return (s.getCount() > 1 ? s.getCount() + "x " : "") + id;
+   }
+
+   // ---------------------------------------------------------------- GUI editor
+
+   static ItemStack label(Item item, String name, List<String> lore) {
+      ItemStack stack = new ItemStack(item);
+      stack.set(DataComponentTypes.CUSTOM_NAME, Text.literal(name));
+      if (!lore.isEmpty()) {
+         List<Text> lines = new ArrayList<>();
+         for (String line : lore) {
+            lines.add(Text.literal(line));
+         }
+
+         stack.set(DataComponentTypes.LORE, new LoreComponent(lines));
+      }
+
+      return stack;
+   }
+
+   static void openEditor(ServerPlayerEntity player, String name, Tournament.Kit initial) {
+      final String n = name;
+      final Tournament.Kit init = initial;
+      player.openHandledScreen(
+         new SimpleNamedScreenHandlerFactory((syncId, inv, p) -> new Kits.EditorMenu(syncId, (ServerPlayerEntity)p, n, init), Text.literal("Kit " + name + " (armor + offhand: row 5)"))
+      );
+   }
+
+   /**
+    * Chest-style editor. Everything in it is a copy: the 36 slots below are copies of the editor's own inventory (so
+    * items can be picked from there), nothing is ever taken from or given to the real inventory, and whatever is
+    * left over is discarded on close, so nothing can be lost or duplicated. Save writes the kit.
+    * Rows 1-3 = inventory slots 9-35, row 4 = hotbar, row 5 = helmet, chestplate, leggings, boots, offhand.
+    */
+   static final class EditorMenu extends ScreenHandler {
+      private final Inventory container = new SimpleInventory(54);
+      private final Inventory mirror = new SimpleInventory(36);
+      private final String kitName;
+
+      EditorMenu(int syncId, ServerPlayerEntity player, String kitName, Tournament.Kit initial) {
+         super(ScreenHandlerType.GENERIC_9X6, syncId);
+         this.kitName = kitName;
+         for (int row = 0; row < 6; row++) {
+            for (int col = 0; col < 9; col++) {
+               int index = row * 9 + col;
+               final int armorIdx = index >= 36 && index <= 39 ? index - 36 : -1;
+               final boolean locked = index >= 41;
+               this.addSlot(new Slot(this.container, index, 8 + col * 18, 18 + row * 18) {
+                  public boolean canInsert(ItemStack stack) {
+                     if (locked) {
+                        return false;
+                     }
+
+                     if (armorIdx >= 0) {
+                        EquipmentSlot want = new EquipmentSlot[]{EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}[armorIdx];
+                        return BotSupport.armorSlotFor(stack) == want;
+                     }
+
+                     return true;
+                  }
+
+                  public boolean canTakeItems(PlayerEntity who) {
+                     return !locked;
+                  }
+
+                  public int getMaxItemCount() {
+                     return armorIdx >= 0 ? 1 : 64;
+                  }
+               });
+            }
+         }
+
+         for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 9; col++) {
+               this.addSlot(new Slot(this.mirror, row * 9 + col, 8 + col * 18, 140 + row * 18));
+            }
+         }
+
+         for (int col = 0; col < 9; col++) {
+            this.addSlot(new Slot(this.mirror, 27 + col, 8 + col * 18, 198));
+         }
+
+         if (initial != null) {
+            this.fill(initial);
+         }
+
+         this.mirrorFrom(player);
+         this.controls();
+      }
+
+      /** the picker copies: the player's own inventory (rows 9-35, then the hotbar). */
+      private void mirrorFrom(ServerPlayerEntity player) {
+         for (int i = 0; i < 27; i++) {
+            this.mirror.setStack(i, player.getInventory().getStack(9 + i).copy());
+         }
+
+         for (int i = 0; i < 9; i++) {
+            this.mirror.setStack(27 + i, player.getInventory().getStack(i).copy());
+         }
+      }
+
+      private void fill(Tournament.Kit k) {
+         for (int c = 0; c < 27; c++) {
+            this.container.setStack(c, k.main[9 + c].copy());
+         }
+
+         for (int c = 0; c < 9; c++) {
+            this.container.setStack(27 + c, k.main[c].copy());
+         }
+
+         for (int i = 0; i < 4; i++) {
+            this.container.setStack(36 + i, k.armor[i].copy());
+         }
+
+         this.container.setStack(40, k.off.copy());
+      }
+
+      private void controls() {
+         for (int i = 41; i < 54; i++) {
+            this.container.setStack(i, ItemStack.EMPTY);
+         }
+
+         for (int i = 41; i < 45; i++) {
+            this.container.setStack(i, label(Items.GRAY_STAINED_GLASS_PANE, " ", List.of()));
+         }
+
+         this.container.setStack(45, label(Items.LIME_DYE, "§aSave kit " + this.kitName, List.of("§7Writes this layout to the kit and closes.")));
+         this.container.setStack(46, label(Items.BARRIER, "§cCancel", List.of("§7Closes without saving.")));
+         this.container.setStack(47, label(Items.LAVA_BUCKET, "§6Clear everything", List.of("§7Empties the editor (the kit is not changed until Save).")));
+         this.container.setStack(48, label(Items.CHEST, "§bLoad my inventory", List.of("§7Copies your hotbar, inventory, armor and offhand here.")));
+         this.container.setStack(49, label(Items.NAME_TAG, "§eKit: " + this.kitName, List.of("§7Everything here is a copy: your own items are never moved.", "§7Take items from the slots below, drop them in the kit.", "§7Armor slots only take their own piece.")));
+      }
+
+      public boolean canUse(PlayerEntity player) {
+         return true;
+      }
+
+      public ItemStack quickMove(PlayerEntity player, int index) {
+         return ItemStack.EMPTY;
+      }
+
+      public void onClosed(PlayerEntity player) {
+         // nothing in here is real: just drop the cursor
+         this.setCursorStack(ItemStack.EMPTY);
+      }
+
+      public void onSlotClick(int slotId, int button, SlotActionType type, PlayerEntity player) {
+         if (!(player instanceof ServerPlayerEntity)) {
+            return;
+         }
+
+         ServerPlayerEntity sp = (ServerPlayerEntity)player;
+         if (slotId < 0) {
+            if (slotId == -999 && type == SlotActionType.PICKUP) {
+               this.setCursorStack(ItemStack.EMPTY);
+               this.syncState();
+            } else if (type == SlotActionType.QUICK_CRAFT) {
+               super.onSlotClick(slotId, button, type, player);
+            }
+
+            return;
+         }
+
+         if (type == SlotActionType.QUICK_MOVE || type == SlotActionType.THROW || type == SlotActionType.SWAP || type == SlotActionType.CLONE) {
+            this.syncState();
+            return;
+         }
+
+         if (slotId >= 45 && slotId < 54) {
+            this.control(sp, slotId);
+            this.setCursorStack(ItemStack.EMPTY);
+            this.syncState();
+            return;
+         }
+
+         if (slotId >= 41 && slotId < 45) {
+            this.syncState();
+            return;
+         }
+
+         super.onSlotClick(slotId, button, type, player);
+      }
+
+      private void control(ServerPlayerEntity sp, int slotId) {
+         MinecraftServer server = BotSupport.sw(sp).getServer();
+         if (slotId == 45) {
+            Tournament.Kit k = new Tournament.Kit();
+            for (int c = 0; c < 27; c++) {
+               k.main[9 + c] = this.container.getStack(c).copy();
+            }
+
+            for (int c = 0; c < 9; c++) {
+               k.main[c] = this.container.getStack(27 + c).copy();
+            }
+
+            for (int i = 0; i < 4; i++) {
+               k.armor[i] = this.container.getStack(36 + i).copy();
+            }
+
+            k.off = this.container.getStack(40).copy();
+            STORE.put(key(this.kitName), k);
+            save(server);
+            sp.sendMessage(Text.literal("Saved kit " + this.kitName + " (" + itemCount(k) + " items)."));
+            sp.closeHandledScreen();
+         } else if (slotId == 46) {
+            sp.closeHandledScreen();
+         } else if (slotId == 47) {
+            for (int i = 0; i < 41; i++) {
+               this.container.setStack(i, ItemStack.EMPTY);
+            }
+         } else if (slotId == 48) {
+            this.fill(Tournament.snapshot(sp));
+         }
+      }
+   }
+}
 
 /**
  * Tournament: two chosen bots fight a number of rounds. Each round starts from the same two spots (30 blocks apart, facing each other)
@@ -14117,8 +15594,8 @@ final class Tournament {
       spotB = sb;
       yawA = (float)Math.toDegrees(Math.atan2(-(sb.x - sa.x), sb.z - sa.z));
       yawB = (float)Math.toDegrees(Math.atan2(-(sa.x - sb.x), sa.z - sb.z));
-      kitA = snapshot(pa);
-      kitB = snapshot(pb);
+      kitA = Kits.kitOrSnapshot(pa, Kits.tourKit);
+      kitB = Kits.kitOrSnapshot(pb, Kits.tourKit);
       active = true;
       BotSupport.run(server, "herobot botleaveondeath true");
       chat(server, a + " vs " + b + (rounds > 0 ? ", " + rounds + " round(s)." : ", endless rounds until stopped.") + (holdReady ? " Placing the fighters, press Start when ready." : ""));
@@ -14772,7 +16249,7 @@ final class Arena {
       state = 0;
       crowdActive = true;
       nextChat = PvpBotMod.globalTick + 200;
-      PvpBotMod.queueMassJobs(server, ownerP, names, null);
+      PvpBotMod.queueMassJobs(server, ownerP, names, null, null);
       return null;
    }
 
@@ -15191,7 +16668,7 @@ final class Arena {
       for (String n : CROWD) {
          ServerPlayerEntity p = server.getPlayerManager().getPlayer(n);
          if (p != null) {
-            KITS.put(n, Tournament.snapshot(p));
+            KITS.put(n, Kits.kitOrSnapshot(p, Kits.ladderKit));
          }
       }
 
@@ -15316,7 +16793,7 @@ final class Arena {
             BotSupport.run(server, "team join " + t.id + " " + n);
             ServerPlayerEntity p = server.getPlayerManager().getPlayer(n);
             if (p != null) {
-               KITS.put(n, Tournament.snapshot(p));
+               KITS.put(n, Kits.kitOrSnapshot(p, Kits.teamsKit));
             }
          }
       }
