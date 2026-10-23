@@ -239,53 +239,73 @@ public class PvpBotMod implements ModInitializer {
    );
    static final PvpBotMod.Opt STRAFE = opt("strafe", "strafe", 1.0, 0.0, 1.0, true, "strafe left/right while close to the target");
    static final PvpBotMod.Opt STRAFE_TICKS = opt("strafeticks", "strafe_ticks", 12.0, 2.0, 40.0, false, "base ticks between strafe-side re-rolls");
-   static final PvpBotMod.Opt COMBO_CHANCE = opt("combochance", "combo_chance", 50.0, 0.0, 100.0, false, "percent chance to start a combo after a hit lands");
-   static final PvpBotMod.Opt COMBO_STAP_CHANCE = opt(
-      "combostap", "combo_stap_weight", 30.0, 0.0, 100.0, false, "percent chance to pick s-tap when a combo starts"
+   static final PvpBotMod.Opt BACKAWAY_CHANCE = opt(
+      "backawaychance", "backaway_chance", 60.0, 0.0, 100.0, false, "percent chance to back away briefly after each landed hit (hit, back away, hit, repeat)"
    );
-   static final PvpBotMod.Opt COMBO_WTAP_CHANCE = opt(
-      "combowtap", "combo_wtap_weight", 30.0, 0.0, 100.0, false, "percent chance to pick w-tap when a combo starts"
+   static final PvpBotMod.Opt BACKAWAY_TICKS = opt("backawayticks", "backaway_ticks", 2.0, 1.0, 10.0, false, "ticks the bot walks backwards after a hit");
+   static final PvpBotMod.Opt ALWAYS_CRIT = opt(
+      "alwayscrit", "always_crit", 1.0, 0.0, 1.0, true, "always go for a crit when the target is very close, eating or barely moving"
    );
-   static final PvpBotMod.Opt COMBO_UPPERCUT_CHANCE = opt(
-      "combouppercut", "combo_uppercut_weight", 20.0, 0.0, 100.0, false, "percent chance to pick uppercut when a combo starts"
+   static final PvpBotMod.Opt ALWAYSCRIT_DIST = opt(
+      "alwayscritdist", "always_crit_dist", 1.3, 0.5, 3.0, false, "blocks: closer than this, every hit is a crit attempt"
    );
-   static final PvpBotMod.Opt COMBO_STRAFECOMBO_CHANCE = opt(
-      "combostrafecombo", "combo_strafecombo_weight", 20.0, 0.0, 100.0, false, "percent chance to pick strafecombo when a combo starts"
+   static final PvpBotMod.Opt ALWAYSCRIT_SPEED = opt(
+      "alwayscritspeed", "always_crit_speed", 0.04, 0.0, 0.3, false, "target speed (blocks per tick) below which it counts as barely moving"
    );
-   static final PvpBotMod.Opt COMBO_TAP_TICKS = opt("combotapticks", "combo_tap_ticks", 2.0, 1.0, 10.0, false, "ticks an s-tap/w-tap pause lasts");
-   static final PvpBotMod.Opt COMBO_UPPERCUT_RANGE = opt(
-      "uppercutrange", "combo_uppercut_range", 3.5, 1.0, 8.0, false, "blocks within which an uppercut can be started"
+   static final PvpBotMod.Opt DTAP_CHANCE = opt(
+      "dtapchance", "d_tap_chance", 25.0, 0.0, 100.0, false, "percent chance to side-step (D-tap) for a moment after a landed hit, to dodge the counter hit"
    );
-   static final PvpBotMod.Opt COMBO_UPPERCUT_WINDOW = opt(
-      "uppercutwindow", "combo_uppercut_window", 6.0, 1.0, 20.0, false, "ticks the uppercut's rising hit window stays open"
+   static final PvpBotMod.Opt DTAP_TICKS = opt("dtapticks", "d_tap_ticks", 3.0, 1.0, 10.0, false, "ticks the D-tap side-step lasts");
+   static final PvpBotMod.Opt SWEEP_HIT = opt(
+      "sweephit", "sweep_hit", 1.0, 0.0, 1.0, true, "with a sword, stop sprinting right before a hit when another enemy stands next to the target, so the sweeping edge hits both"
    );
-   static final PvpBotMod.Opt COMBO_STRAFE_SWITCH_TICKS = opt(
-      "combostrafeticks", "combo_strafecombo_ticks", 6.0, 2.0, 30.0, false, "ticks between side switches during strafecombo"
+   static final PvpBotMod.Opt MIRROR_PUNISH = opt(
+      "mirrorpunish", "mirror_punish", 50.0, 0.0, 100.0, false, "percent chance to hit back at once when the target swings and misses"
    );
-   static final PvpBotMod.Opt MIX_CHANCE = opt(
-      "mixchance", "combo_mix_chance", 30.0, 0.0, 100.0, false, "percent chance a started combo is MixCombo instead of one fixed type"
+   static final PvpBotMod.Opt MACE_TOTEM = opt(
+      "macetotem", "mace_totem", 1.0, 0.0, 1.0, true, "hold a totem in the main hand while a target with a mace dives at the bot"
    );
-   static final PvpBotMod.Opt MIX_MAXHITS = opt("mixmaxhits", "combo_mix_max_hits", 5.0, 1.0, 20.0, false, "hits a MixCombo series runs before ending");
-   static final PvpBotMod.Opt MIX_SWITCHCHANCE = opt(
-      "mixswitchchance", "combo_mix_switch_chance", 60.0, 0.0, 100.0, false, "percent chance MixCombo re-rolls its type on each hit"
+   static final PvpBotMod.Opt RANGED_CHANCE = opt(
+      "rangedchance", "ranged_chance", 30.0, 0.0, 100.0, false, "percent chance (rolled once a second) to shoot with a bow, crossbow or trident while the target is far away"
    );
-   static final PvpBotMod.Opt COMBOHITS_MINHIT = opt(
-      "combohitsmin", "combo_hits_escape_min", 8.0, 1.0, 60.0, false, "shortest run of hits taken before RandomRepeatedComboHits can trigger"
+   static final PvpBotMod.Opt RANGED_MIN = opt("rangedmin", "ranged_min", 8.0, 4.0, 40.0, false, "blocks: ranged weapons are only used beyond this distance");
+   static final PvpBotMod.Opt RANGED_MAX = opt("rangedmax", "ranged_max", 32.0, 8.0, 64.0, false, "blocks: ranged weapons are only used within this distance");
+   static final PvpBotMod.Opt RANGED_COOLDOWN = opt("rangedcooldown", "ranged_cooldown", 40.0, 5.0, 400.0, false, "ticks between two ranged attacks");
+   static final PvpBotMod.Opt WALLWEB_CHANCE = opt(
+      "wallwebchance", "wall_web_chance", 40.0, 0.0, 100.0, false, "percent chance to knock the target into a wall and web its head"
    );
-   static final PvpBotMod.Opt COMBOHITS_MAXHIT = opt(
-      "combohitsmax", "combo_hits_escape_max", 15.0, 1.0, 60.0, false, "longest run of hits taken before RandomRepeatedComboHits can trigger"
+   static final PvpBotMod.Opt WALLWEB_DIST = opt(
+      "wallwebdist", "wall_web_dist", 3.0, 1.0, 6.0, false, "blocks: how close a wall must be behind the target (away from the bot) to use the wall web"
    );
-   static final PvpBotMod.Opt COMBOHITS_ESCAPECHANCE = opt(
-      "combohitsescapechance",
-      "combo_hits_escape_chance",
+   static final PvpBotMod.Opt WALLWEB_COOLDOWN = opt(
+      "wallwebcooldown", "wall_web_cooldown", 120.0, 10.0, 600.0, false, "ticks before the wall web can be used again"
+   );
+   static final PvpBotMod.Opt TURN_SPEED = opt(
+      "turnspeed", "turn_speed", 25.0, 5.0, 180.0, false, "max degrees per tick the bot turns toward a target that moved to its side or back"
+   );
+   static final PvpBotMod.Opt MACEFINISH_CHANCE = opt(
+      "macefinishaggro", "mace_finish_aggro", 95.0, 0.0, 100.0, false, "percent chance to attack aggressively with crits after a clean mace hit leaves the target very low"
+   );
+   static final PvpBotMod.Opt MACEFINISH_HEARTS = opt(
+      "macefinishhearts", "mace_finish_hearts", 4.0, 1.0, 10.0, false, "hearts: a target at or below this after a mace hit counts as very low"
+   );
+   static final PvpBotMod.Opt HITSESC_MINHIT = opt(
+      "hitsescapemin", "hits_escape_escape_min", 8.0, 1.0, 60.0, false, "shortest run of hits taken before the hits-taken escape can trigger"
+   );
+   static final PvpBotMod.Opt HITSESC_MAXHIT = opt(
+      "hitsescapemax", "hits_escape_escape_max", 15.0, 1.0, 60.0, false, "longest run of hits taken before the hits-taken escape can trigger"
+   );
+   static final PvpBotMod.Opt HITSESC_ESCAPECHANCE = opt(
+      "hitsescapechance",
+      "hits_escape_escape_chance",
       80.0,
       0.0,
       100.0,
       false,
       "percent chance the streak actually triggers an escape once the threshold is hit"
    );
-   static final PvpBotMod.Opt COMBOHITS_WINDCHARGECHANCE = opt(
-      "windchargechance", "combo_hits_windcharge_weight", 34.0, 0.0, 100.0, false, "percent chance the RandomRepeatedComboHits escape is a wind charge launch"
+   static final PvpBotMod.Opt HITSESC_WINDCHARGECHANCE = opt(
+      "windchargechance", "hits_escape_windcharge_weight", 34.0, 0.0, 100.0, false, "percent chance the hits-taken escape is a wind charge launch"
    );
    static final PvpBotMod.Opt WINDCHARGE_HEAL_CHANCE = opt(
       "windchargehealchance",
@@ -341,14 +361,26 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt TNT_COOLDOWN = opt(
       "tntcartcooldown", "tnt_cart_cooldown", 600.0, 100.0, 6000.0, false, "ticks before the bot tries the TNT minecart trick again"
    );
+   static final PvpBotMod.Opt CART_MODE = opt(
+      "cartmode", "cart_mode", 0.0, 0.0, 2.0, false, "cart style: 0 = smart (insta cart for finishes / webbed or eating targets, normal otherwise), 1 = normal (back off then shoot), 2 = insta cart (draw the bow, place rail + cart, shoot at once, then run)"
+   );
+   static final PvpBotMod.Opt CART_FINISH_HP = opt(
+      "cartfinishhp", "cart_finish_hp", 8.0, 2.0, 20.0, false, "target health (half hearts) at or under which the cart finisher is very likely (vexbot doctrine)"
+   );
+   static final PvpBotMod.Opt CART_MIN_HP = opt(
+      "cartminhp", "cart_min_hp", 12.0, 4.0, 20.0, false, "the bot needs at least this much health (incl. absorption) to start a normal cart; finishers only need 6"
+   );
+   static final PvpBotMod.Opt CART_PUNISH = opt(
+      "cartpunish", "cart_punish", 1.0, 0.0, 1.0, true, "also cart a target that just threw a pearl, is in a cobweb, eating or drawing a bow (cart punish)"
+   );
    static final PvpBotMod.Opt WIND_HEAL_MAX = opt(
       "windhealmax", "wind_heal_max_cycles", 6.0, 1.0, 20.0, false, "most extra wind charge + eat cycles in one heal loop"
    );
-   static final PvpBotMod.Opt COMBOHITS_WEBCHANCE = opt(
-      "escapewebchance", "combo_hits_webtrap_weight", 33.0, 0.0, 100.0, false, "percent chance the RandomRepeatedComboHits escape is the panic web trap"
+   static final PvpBotMod.Opt HITSESC_WEBCHANCE = opt(
+      "escapewebchance", "hits_escape_webtrap_weight", 33.0, 0.0, 100.0, false, "percent chance the hits-taken escape is the panic web trap"
    );
-   static final PvpBotMod.Opt COMBOHITS_RUNCHANCE = opt(
-      "escaperunchance", "combo_hits_run_weight", 33.0, 0.0, 100.0, false, "percent chance the RandomRepeatedComboHits escape is just running away to eat"
+   static final PvpBotMod.Opt HITSESC_RUNCHANCE = opt(
+      "escaperunchance", "hits_escape_run_weight", 33.0, 0.0, 100.0, false, "percent chance the hits-taken escape is just running away to eat"
    );
    static final PvpBotMod.Opt JUMP_CHANCE = opt(
       "jumpchance", "jump_chance", 15.0, 0.0, 100.0, false, "percent chance, every quarter second, that a bot close to its target jumps"
@@ -372,7 +404,7 @@ public class PvpBotMod implements ModInitializer {
       "percent chance to raise a shield when the target is about to swing and in range (needs a shield in the inventory)"
    );
    static final PvpBotMod.Opt SHIELD_RANGE = opt(
-      "shieldrange", "shield_range", 1.5, 0.5, 6.0, false, "blocks within which the bot will consider raising a shield (it never shields while comboing)"
+      "shieldrange", "shield_range", 1.5, 0.5, 6.0, false, "blocks within which the bot will consider raising a shield (it does not shield right after it hits)"
    );
    static final PvpBotMod.Opt SHIELD_TICKS = opt(
       "shieldticks",
@@ -393,7 +425,7 @@ public class PvpBotMod implements ModInitializer {
       0.0,
       100.0,
       false,
-      "percent chance the bot raises its shield right after landing a hit (only when it isn't running a combo)"
+      "percent chance the bot raises its shield right after landing a hit "
    );
    static final PvpBotMod.Opt POSTSWING_SHIELD_TICKS_MIN = opt(
       "postswingshieldticksmin", "postswing_shield_ticks_min", 8.0, 2.0, 100.0, false, "shortest a post-swing shield hold lasts"
@@ -444,7 +476,7 @@ public class PvpBotMod implements ModInitializer {
       "macefear", "mace_fear", 1.0, 0.0, 1.0, true, "bot gets scared (stops chasing) while the target is airborne with a mace, e.g. an elytra dive"
    );
    static final PvpBotMod.Opt MACE_FEAR_CHANCE = opt(
-      "macefearchance", "mace_fear_chance", 100.0, 0.0, 100.0, false, "percent chance the bot gets scared when a mace dive starts"
+      "macefearchance", "mace_fear_chance", 100.0, 0.0, 100.0, false, "no longer used: the bot always reacts to a mace dive (kept so old configs still load)"
    );
    static final PvpBotMod.Opt MACE_FEAR_RUN = opt(
       "macefearrun", "mace_fear_run_weight", 35.0, 0.0, 100.0, false, "percent of scared moments where the bot runs away instead of dodging in a small area"
@@ -456,7 +488,7 @@ public class PvpBotMod implements ModInitializer {
       "macefeardist", "mace_fear_distance", 6.0, 2.0, 20.0, false, "blocks: mace fear only starts while the target is this close, and ends once the target is more than 3 blocks past this"
    );
    static final PvpBotMod.Opt FALL_SHIELD_CHANCE = opt(
-      "fallshieldchance", "fall_shield_chance", 100.0, 0.0, 100.0, false, "percent chance (rolled once per dive) to raise the shield when the target is falling toward the bot, or is high above it with a mace (100 = always)"
+      "fallshieldchance", "fall_shield_chance", 100.0, 0.0, 100.0, false, "no longer used: the shield always goes up (and stays up) when the target is falling at the bot, or is high above it with a mace (kept so old configs still load)"
    );
    static final PvpBotMod.Opt FALL_MACE = opt(
       "fallmace", "fall_mace", 1.0, 0.0, 1.0, true, "when the bot falls toward the target it may smash it with a mace"
@@ -537,7 +569,7 @@ public class PvpBotMod implements ModInitializer {
       "elytraburstchance", "elytra_burst_chance", 70.0, 0.0, 100.0, false, "percent chance to glide again after a Wind Burst mace smash launches the bot back up"
    );
    static final PvpBotMod.Opt ELYTRA_ESCAPE_CHANCE = opt(
-      "elytraescapechance", "elytra_escape_chance", 15.0, 0.0, 100.0, false, "percent chance a retreat (low health, or breaking out of a combo) is an elytra + firework flight away from the target (needs an elytra and a firework rocket)"
+      "elytraescapechance", "elytra_escape_chance", 15.0, 0.0, 100.0, false, "percent chance a retreat (low health, or breaking out of a run of hits) is an elytra + firework flight away from the target (needs an elytra and a firework rocket)"
    );
    static final PvpBotMod.Opt ELYTRA_ESCAPE_DIST = opt(
       "elytraescapedist", "elytra_escape_distance", 28.0, 10.0, 80.0, false, "blocks from the target at which the escape flight lands, swaps the chestplate back and eats"
@@ -866,7 +898,7 @@ public class PvpBotMod implements ModInitializer {
       "kitrepair", "kit_repair", 1.0, 0.0, 1.0, true, "kits are handed out at full durability, even when the saved items were damaged"
    );
    static final PvpBotMod.Opt FALL_BACK_CHANCE = opt(
-      "fallbackchance", "fall_back_chance", 70.0, 0.0, 100.0, false, "percent chance (rolled once per dive) that a bot with no shield backs away while still facing a target that is falling at it, then hits it as soon as it lands"
+      "fallbackchance", "fall_back_chance", 100.0, 0.0, 100.0, false, "no longer used: a bot with no shield always backs away while facing a target that is falling at it, then hits it when it lands (kept so old configs still load)"
    );
    static final PvpBotMod.Opt PRED_WEB_CHANCE = opt(
       "predictwebchance", "predict_web_chance", 40.0, 0.0, 100.0, false, "percent chance to put a cobweb where a closing-in target is about to stand: when the bot starts healing with the target close, or when it is at 6 hearts or less and the target rushes it"
@@ -968,8 +1000,8 @@ public class PvpBotMod implements ModInitializer {
       CRIT_CHANCE,
       STRAFE,
       STRAFE_TICKS,
-      COMBO_CHANCE,
-      MIX_CHANCE,
+      BACKAWAY_CHANCE,
+      WALLWEB_CHANCE,
       BUNNY_HOP,
       EAT_HEARTS,
       FALL_CRIT,
@@ -1000,10 +1032,10 @@ public class PvpBotMod implements ModInitializer {
       {0.0, 0.0, 0.0, 100.0, 1.0, 6.0, 100.0, 80.0, 1.0, 7.0, 1.0, 50.0, 100.0, 100.0, 100.0, 100.0, 0.0, 0.0, 100.0, 1.0, 8.0, 12.0, 1.5, 80.0, 100.0, 8.0, 10.0}
    };
    static String difficultyName = "normal";
-   static final String[] PLAYSTYLE_NAMES = new String[]{"aggressive", "defensive", "combo"};
-   static final List<String> PLAYSTYLE_CHOICES = List.of("aggressive", "defensive", "combo");
+   static final String[] PLAYSTYLE_NAMES = new String[]{"aggressive", "defensive", "pressure"};
+   static final List<String> PLAYSTYLE_CHOICES = List.of("aggressive", "defensive", "pressure");
    static final PvpBotMod.Opt[] PLAYSTYLE_OPTS = new PvpBotMod.Opt[]{
-      KEEP_DISTANCE, STRAFE_CHANCE, CRIT_CHAIN_CHANCE, EAT_HEARTS, POTION_HEARTS, COMBO_CHANCE, MIX_CHANCE, JUMP_CHANCE, STUN_CHANCE, COCOON_HEARTS, HIT_WEB
+      KEEP_DISTANCE, STRAFE_CHANCE, CRIT_CHAIN_CHANCE, EAT_HEARTS, POTION_HEARTS, BACKAWAY_CHANCE, WALLWEB_CHANCE, JUMP_CHANCE, STUN_CHANCE, COCOON_HEARTS, HIT_WEB
    };
    static final double[][] PLAYSTYLES = new double[][]{
       {1.8, 75.0, 55.0, 3.0, 4.0, 55.0, 20.0, 25.0, 45.0, 2.0, 35.0},
@@ -1548,7 +1580,7 @@ public class PvpBotMod implements ModInitializer {
          return 0;
       }
 
-      ServerPlayerEntity me = src.getPlayerOrThrow();
+      ServerPlayerEntity me = src.getPlayer();
       MinecraftServer server = src.getServer();
       if (!herobotPresent()) {
          src.sendError(Text.literal("HeroBot is not installed: /playerspawn and /player were not found."));
@@ -1564,7 +1596,7 @@ public class PvpBotMod implements ModInitializer {
          return 0;
       } else {
          server.getCommandManager().parseAndExecute(src, "playerspawn " + name);
-         PvpBotMod.Pending pend = new PvpBotMod.Pending(me.getName().getString(), false, null, null);
+         PvpBotMod.Pending pend = new PvpBotMod.Pending(me == null ? "" : me.getName().getString(), false, null, null);
          pend.kit = kit == null ? null : Kits.key(kit);
          PENDING.put(name, pend);
          return 1;
@@ -1753,7 +1785,7 @@ public class PvpBotMod implements ModInitializer {
          "/pvpbot difficulty <1-6 or beginner/easy/normal/hard/insane/perfect> (perfect is brutal)",
          "Teams use vanilla /team (/team add red, /team join red Bot1). Bots leave creative players alone.",
          "/pvpbot goto <bot> <x> <y> <z> sends a bot to a block position using the A* pathfinder. Coordinates support normal Minecraft absolute or relative syntax; y is the bot's feet block. Use /pvpbot goto stop <bot> to cancel.",
-         "/pvpbot tiers opens the tier menu: a tier LT5..HT1 per bot for Sword, SMP, Mace, ElytraMace and Axe (/pvpbot tier <bot> <sword|smp|mace|elytra|axe> <tier>, /pvpbot tiers random [min] [max]). The items a bot carries decide which tiers apply; several can apply at once. SMP = shield + cobwebs + splash potions. Skills come only from the tiers: Sword = aim, spacing, crits and combos; Axe = axe stuns and shield; SMP = webs, escapes, pearls and healing; Mace = smashes, wind charges and stun slams.",
+         "/pvpbot tiers opens the tier menu: a tier LT5..HT1 per bot for Sword, SMP, Mace, ElytraMace and Axe (/pvpbot tier <bot> <sword|smp|mace|elytra|axe> <tier>, /pvpbot tiers random [min] [max]). The items a bot carries decide which tiers apply; several can apply at once. SMP = shield + cobwebs + splash potions. Skills come only from the tiers: Sword = aim, spacing, crits and hit-and-back-away; Axe = axe stuns and shield; SMP = webs, escapes, pearls and healing; Mace = smashes, wind charges and stun slams.",
          "Elytra + fireworks: /pvpbot elytraescapechance, elytrachasechance, elytraboosts, elytratakeoff (needs an elytra and firework rockets in the bot's inventory). Mace fear range: /pvpbot macefeardist.",
          "Lava on web: /pvpbot lavaweb, lavawebchance, lavawebticks, lavawebrepeats, lavawebside, lavawebback (needs a lava bucket in the bot's inventory). Web escape delay: /pvpbot webescapedelaymin and webescapedelaymax.",
          "Every setting is /pvpbot <setting> [value]. Run /pvpbot options to see them all, or /pvpbot gui for a menu."
@@ -1844,7 +1876,7 @@ public class PvpBotMod implements ModInitializer {
          return 0;
       }
 
-      ServerPlayerEntity me = src.getPlayerOrThrow();
+      ServerPlayerEntity me = src.getPlayer();
       MinecraftServer server = src.getServer();
       if (!herobotPresent()) {
          src.sendError(Text.literal("HeroBot is not installed: /playerspawn and /player were not found."));
@@ -1864,7 +1896,7 @@ public class PvpBotMod implements ModInitializer {
             src.sendError(Text.literal("No usable names found (or generated) in " + namesPath().getFileName() + "."));
             return 0;
          } else {
-            queueMassJobs(server, me, names, team, kit);
+            queueMassJobs(server, me, names, team, kit, src.getPosition());
             int total = names.size();
             String shown = String.join(", ", names.subList(0, Math.min(3, names.size()))) + (names.size() > 3 ? ", ..." : "");
             src.sendFeedback(() -> Text.literal("Spawning " + total + " bots: " + shown + (team != null ? " on team " + team : "")), false);
@@ -1948,9 +1980,12 @@ public class PvpBotMod implements ModInitializer {
    }
 
    static void queueMassJobs(MinecraftServer server, ServerPlayerEntity owner, List<String> names, String team, String kit) {
-      Vec3d base = owner.getEntityPos();
+      queueMassJobs(server, owner, names, team, kit, owner.getEntityPos());
+   }
+
+   static void queueMassJobs(MinecraftServer server, ServerPlayerEntity owner, List<String> names, String team, String kit, Vec3d base) {
       double radius = Math.max(3.0, Math.min(12.0, names.size() * 0.7));
-      String ownerName = owner.getName().getString();
+      String ownerName = owner == null ? "" : owner.getName().getString();
       if (team != null) {
          BotSupport.run(server, "team add " + team);
       }
@@ -2143,7 +2178,7 @@ public class PvpBotMod implements ModInitializer {
       }
 
       if (idx < 0) {
-         ((ServerCommandSource)ctx.getSource()).sendError(Text.literal("Unknown playstyle. Use aggressive, defensive, or combo."));
+         ((ServerCommandSource)ctx.getSource()).sendError(Text.literal("Unknown playstyle. Use aggressive, defensive, or pressure."));
          return 0;
       } else {
          setPlaystyleIndex(idx);
@@ -2294,6 +2329,18 @@ public class PvpBotMod implements ModInitializer {
       int pauseUntil;
       int attackTick = -1;
       int critStart;
+      int totemUntil;
+      int mirrorSwingTick = -100;
+      float lastSwingProg;
+      int rangedStage;
+      int rangedStart;
+      int rangedKind;
+      int rangedNext;
+      boolean wallArmed;
+      int wallArmTick;
+      int wallNextRoll;
+      boolean placeHead;
+      int finishUntil;
       int phaseStart;
       int useStart;
       int eaten;
@@ -2379,14 +2426,8 @@ public class PvpBotMod implements ModInitializer {
       Vec3d lavaAim;
       final List<BlockPos> lavaPre = new ArrayList<>();
       int critChainUntil;
-      int comboActive;
-      int comboType = -1;
-      boolean comboMixed;
-      int comboMixHitsLeft;
-      boolean comboUppercutRising;
-      int comboUppercutStart;
-      int comboHitsStreak;
-      int comboHitsThreshold = -1;
+      int hitsStreak;
+      int hitsThreshold = -1;
       int webtrapStage;
       int webtrapStart;
       int webtrapPlaced;
@@ -2455,6 +2496,7 @@ public class PvpBotMod implements ModInitializer {
       int tntStage;
       int tntStart;
       int tntShots;
+      boolean tntInsta;
       int tntDraw;
       int nextTntTick;
       BlockPos tntRail;
@@ -2625,13 +2667,8 @@ public class PvpBotMod implements ModInitializer {
          this.inCocoon = false;
          this.webWasEating = false;
          this.critChainUntil = 0;
-         this.comboActive = 0;
-         this.comboType = -1;
-         this.comboMixed = false;
-         this.comboMixHitsLeft = 0;
-         this.comboUppercutRising = false;
-         this.comboHitsStreak = 0;
-         this.comboHitsThreshold = -1;
+         this.hitsStreak = 0;
+         this.hitsThreshold = -1;
          this.webtrapStage = 0;
          this.windStage = 0;
          this.windLoop = false;
@@ -2863,7 +2900,8 @@ public class PvpBotMod implements ModInitializer {
       PEARLAGGRO,
       MEND,
       DODGE,
-      PREDWEB;
+      PREDWEB,
+      RANGED;
    }
 
    static final class PlacedWeb {
@@ -3131,7 +3169,98 @@ final class BotSupport {
       }
    }
 
+   /** wall web: start placing a web at the target's head, against the wall it was knocked into. */
+   static void startWallWeb(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
+      if (f.placeStage != 0) {
+         return;
+      }
+
+      int idx = findItemIndex(bot, Items.COBWEB);
+      if (idx < 0) {
+         return;
+      }
+
+      f.placeHead = true;
+      if (wallHeadAim(bot, target, f) == null) {
+         f.placeHead = false;
+         return;
+      }
+
+      int slot = toHotbar(bot, idx, findWeaponSlot(bot));
+      if (slot < 0) {
+         f.placeHead = false;
+         return;
+      }
+
+      run(server, "player " + name + " move");
+      run(server, "player " + name + " hotbar " + (slot + 1));
+      f.strafeDir = 0;
+      f.placeStage = 1;
+      f.placeRandom = false;
+      f.placeRetried = false;
+      f.placeStart = PvpBotMod.globalTick - 2;
+   }
+
+   /** aim point on the wall face behind the target at head height, off to the side of its hitbox so the click lands on the block. */
+   static Vec3d wallHeadAim(ServerPlayerEntity bot, ServerPlayerEntity target, PvpBotMod.Fight f) {
+      World level = BotSupport.sw(target);
+      double dx = target.getX() - bot.getX();
+      double dz = target.getZ() - bot.getZ();
+      double len = Math.sqrt(dx * dx + dz * dz);
+      if (len < 0.3) {
+         return null;
+      }
+
+      dx /= len;
+      dz /= len;
+      double headY = target.getY() + 1.0;
+      BlockPos prev = null;
+      for (double st = 0.0; st <= PvpBotMod.WALLWEB_DIST.value + 1.0; st += 0.25) {
+         BlockPos cell = BlockPos.ofFloored(target.getX() + dx * st, headY, target.getZ() + dz * st);
+         if (prev != null && cell.equals(prev)) {
+            continue;
+         }
+
+         if (!level.getBlockState(cell).getCollisionShape(level, cell).isEmpty()) {
+            if (prev == null || !level.getBlockState(prev).isAir()) {
+               return null;
+            }
+
+            int nx = cell.getX() - prev.getX();
+            int nz = cell.getZ() - prev.getZ();
+            if (Math.abs(nx) + Math.abs(nz) != 1) {
+               return null;
+            }
+
+            // face of the wall block that touches the web cell, centre of the face
+            double fx = cell.getX() + 0.5 - nx * 0.5;
+            double fz = cell.getZ() + 0.5 - nz * 0.5;
+            double fy = cell.getY() + 0.5;
+            // slide along the face, away from the target's hitbox, but inside the web cell
+            if (nx != 0) {
+               double c = target.getZ() - (prev.getZ() + 0.5);
+               fz += c >= 0.0 ? Math.max(-0.45, c - 0.42) : Math.min(0.45, c + 0.42);
+               fz -= 0.0;
+            } else {
+               double c = target.getX() - (prev.getX() + 0.5);
+               fx += c >= 0.0 ? Math.max(-0.45, c - 0.42) : Math.min(0.45, c + 0.42);
+            }
+
+            f.placeCell = prev;
+            return new Vec3d(fx, fy, fz);
+         }
+
+         prev = cell;
+      }
+
+      return null;
+   }
+
    static Vec3d webAimPoint(ServerPlayerEntity bot, ServerPlayerEntity target, PvpBotMod.Fight f) {
+      if (f.placeHead) {
+         return wallHeadAim(bot, target, f);
+      }
+
       World level = BotSupport.sw(target);
       int floorY = target.getBlockPos().getY();
       double lead = PvpBotMod.WEB_LEAD_TICKS.value * 0.4;
@@ -3255,6 +3384,7 @@ final class BotSupport {
 
    static void endWebPlace(MinecraftServer server, String name, PvpBotMod.Fight f) {
       f.placeStage = 0;
+      f.placeHead = false;
       f.placeRandom = false;
       f.placeRetried = false;
       f.placeCooldown = PvpBotMod.globalTick + 30;
@@ -4042,11 +4172,43 @@ final class BotSupport {
       return n;
    }
 
+   /**
+    * a target that is far off to the side or behind is not locked onto at once: the bot turns toward it at most turnspeed degrees per aim tick.
+    * returns null when the target is already roughly in front.
+    */
+   static String limitedTurn(String name, ServerPlayerEntity bot, ServerPlayerEntity target) {
+      double dx = target.getX() - bot.getX();
+      double dz = target.getZ() - bot.getZ();
+      double hl = Math.sqrt(dx * dx + dz * dz);
+      if (hl < 0.4) {
+         return null;
+      }
+
+      double want = Math.toDegrees(Math.atan2(-dx, dz));
+      double diff = wrapDegrees(want - bot.getYaw());
+      if (Math.abs(diff) <= 50.0) {
+         return null;
+      }
+
+      double step = Math.max(5.0, PvpBotMod.TURN_SPEED.value);
+      double newYaw = bot.getYaw() + Math.max(-step, Math.min(step, diff));
+      double r = Math.toRadians(newYaw);
+      double px = bot.getX() - Math.sin(r) * 5.0;
+      double pz = bot.getZ() + Math.cos(r) * 5.0;
+      double py = bot.getEyeY() + (target.getEyeY() - bot.getEyeY()) * Math.min(1.0, 5.0 / hl);
+      return "player " + name + " look at " + fmt(px) + " " + fmt(py) + " " + fmt(pz);
+   }
+
    static String aimCmd(String name, ServerPlayerEntity bot, ServerPlayerEntity target, PvpBotMod.Fight f) {
       double w = PvpBotMod.WOBBLE.value;
       double lead = PvpBotMod.PREDICT_TICKS.value;
       boolean leading = lead > 0.0 && PvpBotMod.AIM.asInt() <= 2;
       boolean spread = PvpBotMod.AIM_SPREAD.value > 0.0 && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.AIM_SPREAD.value;
+      String turning = limitedTurn(name, bot, target);
+      if (turning != null) {
+         return turning;
+      }
+
       boolean overshootRoll = !f.overshotLast
          && PvpBotMod.OVERSHOOT_CHANCE.value > 0.0
          && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.OVERSHOOT_CHANCE.value;
@@ -4410,14 +4572,14 @@ final class BotSupport {
       PvpBotMod.MassJob job = PvpBotMod.MASS_QUEUE.poll();
       if (job != null) {
          ServerPlayerEntity owner = server.getPlayerManager().getPlayer(job.owner);
-         if (owner == null) {
+         if (owner == null && !job.owner.isEmpty()) {
             PvpBotMod.MASS_QUEUE.clear();
          } else if (server.getPlayerManager().getPlayer(job.name) == null && !PvpBotMod.PENDING.containsKey(job.name)) {
-            server.getCommandManager().parseAndExecute(owner.getCommandSource().withSilent(), "playerspawn " + job.name);
+            server.getCommandManager().parseAndExecute((owner != null ? owner.getCommandSource() : server.getCommandSource()).withSilent(), "playerspawn " + job.name);
             PvpBotMod.Pending pend = new PvpBotMod.Pending(job.owner, true, job.team, job.pos);
             pend.kit = job.kit;
             PvpBotMod.PENDING.put(job.name, pend);
-            if (PvpBotMod.MASS_QUEUE.isEmpty()) {
+            if (owner != null && PvpBotMod.MASS_QUEUE.isEmpty()) {
                owner.sendMessage(Text.literal("Mass spawn: all bots requested. They join over the next moments."));
             }
          }
@@ -6264,6 +6426,9 @@ final class Fighting {
                   case DODGE:
                      dodgePhase(server, name, f, bot, target, dist);
                      break;
+                  case RANGED:
+                     rangedPhase(server, name, f, bot, target, dist);
+                     break;
                   case PREDWEB:
                      predWebPhase(server, name, f, bot, target, dist);
                      break;
@@ -6292,6 +6457,11 @@ final class Fighting {
          ServerPlayerEntity self = f.lastBot;
          if (self != null && BotSupport.rayReach(self, target, PvpBotMod.ATTACK_RANGE.value) && self.canSee(target)) {
             boolean swapped = attributeSwap(server, name, f, self);
+            if (PvpBotMod.SWEEP_HIT.on() && self.isSprinting() && self.getMainHandStack().isIn(ItemTags.SWORDS) && otherEnemyNear(self, target)) {
+               BotSupport.run(server, "player " + name + " unsprint");
+               self.setSprinting(false);
+            }
+
             self.attack(target);
             if (swapped) {
                f.weaponSlot = -1;
@@ -6303,6 +6473,17 @@ final class Fighting {
 
       f.attackTick = PvpBotMod.globalTick;
       f.lastHit = !target.isAlive() || target.getHealth() + target.getAbsorptionAmount() < before - 0.01;
+      if (f.lastHit && target.isAlive() && f.lastBot != null && f.lastBot.getMainHandStack().isOf(Items.MACE)) {
+         double left = target.getHealth() + target.getAbsorptionAmount();
+         if (left <= PvpBotMod.MACEFINISH_HEARTS.value * 2.0
+            && before - left >= 4.0
+            && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.MACEFINISH_CHANCE.value) {
+            f.finishUntil = PvpBotMod.globalTick + 100;
+            f.critChainUntil = Math.max(f.critChainUntil, PvpBotMod.globalTick + 100);
+            flog(f, "clean mace hit left the target very low: finishing it with crits");
+         }
+      }
+
       if (f.phase != PvpBotMod.Phase.FIGHT || f.testName != null) {
          flog(f, "attack " + (f.lastHit ? "HIT" : "miss") + " dist=" + String.format(Locale.ROOT, "%.1f", f.lastBot == null ? 0.0 : f.lastBot.distanceTo(target)));
       }
@@ -6402,6 +6583,8 @@ final class Fighting {
 
       f.lastTargetScale = targetScale;
       jumpResetStep(server, name, f, bot, dist, targetScale);
+      maceTotemStep(server, name, f, bot, target);
+      mirrorPunishStep(server, name, f, bot, target, dist);
       boolean hasTotemNow = target.getEquippedStack(EquipmentSlot.OFFHAND).isOf(Items.TOTEM_OF_UNDYING)
          || target.getEquippedStack(EquipmentSlot.MAINHAND).isOf(Items.TOTEM_OF_UNDYING);
       if (f.targetHadTotem && !hasTotemNow && target.isAlive() && PvpBotMod.TOTEM_PUNISH_TICKS.asInt() > 0) {
@@ -6413,24 +6596,20 @@ final class Fighting {
       int botHurtStampNow = bot.getLastAttackedTime();
       if (botHurtBy == target && botHurtStampNow != f.botHurtStamp) {
          f.botHurtStamp = botHurtStampNow;
-         f.comboHitsStreak++;
-         if (f.comboActive != 0) {
-            f.comboActive = 0;
-            f.comboType = -1;
-         }
+         f.hitsStreak++;
       }
 
-      if (f.comboHitsStreak > 0) {
-         if (f.comboHitsThreshold < 0) {
-            int lo = Math.min(PvpBotMod.COMBOHITS_MINHIT.asInt(), PvpBotMod.COMBOHITS_MAXHIT.asInt());
-            int hi = Math.max(PvpBotMod.COMBOHITS_MINHIT.asInt(), PvpBotMod.COMBOHITS_MAXHIT.asInt());
-            f.comboHitsThreshold = lo + ThreadLocalRandom.current().nextInt(hi - lo + 1);
+      if (f.hitsStreak > 0) {
+         if (f.hitsThreshold < 0) {
+            int lo = Math.min(PvpBotMod.HITSESC_MINHIT.asInt(), PvpBotMod.HITSESC_MAXHIT.asInt());
+            int hi = Math.max(PvpBotMod.HITSESC_MINHIT.asInt(), PvpBotMod.HITSESC_MAXHIT.asInt());
+            f.hitsThreshold = lo + ThreadLocalRandom.current().nextInt(hi - lo + 1);
          }
 
-         if (f.comboHitsStreak >= f.comboHitsThreshold && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.COMBOHITS_ESCAPECHANCE.value) {
-            f.comboHitsStreak = 0;
-            f.comboHitsThreshold = -1;
-            if (startComboEscape(server, name, f, bot, target)) {
+         if (f.hitsStreak >= f.hitsThreshold && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.HITSESC_ESCAPECHANCE.value) {
+            f.hitsStreak = 0;
+            f.hitsThreshold = -1;
+            if (startHitsEscape(server, name, f, bot, target)) {
                return;
             }
          }
@@ -6446,6 +6625,7 @@ final class Fighting {
       if (windCounterStep(server, name, f, bot, target, dist, false)
          || maceFearStep(server, name, f, bot, target, dist)
          || fallDodgeStep(server, name, f, bot, target, dist)
+         || rangedStep(server, name, f, bot, target, dist)
          || windClimbStep(server, name, f, bot, target)
          || windMaceStep(server, name, f, bot, target, dist)
          || pillarStep(server, name, f, bot, target, dist, false)
@@ -6490,7 +6670,7 @@ final class Fighting {
                }
             }
 
-            if (!(lowHealth && f.lowFightOn) && (lowHealth || hungry) && PvpBotMod.globalTick >= f.nextEatTick && BotSupport.findFoodIndex(bot) >= 0) {
+            if (!(lowHealth && (f.lowFightOn || PvpBotMod.globalTick < f.finishUntil)) && (lowHealth || hungry) && PvpBotMod.globalTick >= f.nextEatTick && BotSupport.findFoodIndex(bot) >= 0) {
                if (BotSupport.inCobweb(bot) && !f.inCocoon) {
                   // stuck in a web: a wind charge or pearl can free it, otherwise heal where it stands
                   if (!startItemEscape(server, name, f, bot, target)) {
@@ -6506,6 +6686,7 @@ final class Fighting {
                   }
 
                   maybeAim(server, name, f, bot, target);
+                  wallWebArm(bot, target, f, dist);
                   boolean vulnerable = BotSupport.targetVulnerable(bot, target);
                   boolean archer = PvpBotMod.ARCHER_RUSH.on()
                      && (target.getMainHandStack().isOf(Items.BOW) || target.getMainHandStack().isOf(Items.CROSSBOW));
@@ -6590,7 +6771,7 @@ final class Fighting {
                      }
                   }
 
-                  if (f.weaponSlot < 0 || PvpBotMod.globalTick % 10 == 0) {
+                  if ((f.weaponSlot < 0 || PvpBotMod.globalTick % 10 == 0) && PvpBotMod.globalTick >= f.totemUntil) {
                      int w = f.axeMode ? BotSupport.findAxeSlot(bot) : BotSupport.findWeaponSlot(bot);
                      if (w < 0) {
                         w = BotSupport.findWeaponSlot(bot);
@@ -6604,23 +6785,16 @@ final class Fighting {
 
                   if (f.attackTick >= 0 && PvpBotMod.globalTick - f.attackTick >= 2) {
                      f.attackTick = -1;
-                     if (f.comboActive != 0 && !f.edgeHold) {
-                        int type = f.comboMixed
-                           ? (
-                              PvpBotMod.MIX_SWITCHCHANCE.value > 0.0 && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.MIX_SWITCHCHANCE.value
-                                 ? pickComboType()
-                                 : f.comboType
-                           )
-                           : f.comboType;
-                        f.comboType = type;
-                        runComboStep(server, name, f, bot, target, type, edgeBehind);
-                        if (f.comboMixed) {
-                           f.comboMixHitsLeft--;
-                           if (f.comboMixHitsLeft <= 0) {
-                              f.comboActive = 0;
-                              f.comboType = -1;
-                           }
-                        }
+                     if (!f.edgeHold
+                        && !f.wallArmed
+                        && PvpBotMod.BACKAWAY_CHANCE.value > 0.0
+                        && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.BACKAWAY_CHANCE.value) {
+                        runBackAway(server, name, f, edgeBehind);
+                     } else if (!f.edgeHold
+                        && !f.wallArmed
+                        && PvpBotMod.DTAP_CHANCE.value > 0.0
+                        && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.DTAP_CHANCE.value) {
+                        runDTap(server, name, f);
                      } else if (PvpBotMod.POSTSWING_SHIELD_CHANCE.value > 0.0
                         && !f.blocking
                         && bot.getEquippedStack(EquipmentSlot.OFFHAND).isOf(Items.SHIELD)
@@ -6732,35 +6906,22 @@ final class Fighting {
 
                      double reach = BotSupport.reachDistance(bot, target);
                      boolean ready = bot.getAttackCooldownProgress(0.5F) >= 1.0F && PvpBotMod.globalTick >= f.flinchUntil;
-                     if (f.comboUppercutRising) {
-                        if (!bot.isOnGround() && bot.getVelocity().y > 0.0 && reach <= PvpBotMod.ATTACK_RANGE.value && ready) {
-                           doAttack(server, name, f, target);
-                           f.comboUppercutRising = false;
-                           f.sprintHoldUntil = PvpBotMod.globalTick + 3;
-                           bot.fallDistance = 0.0;
-                           return;
-                        }
-
-                        if (PvpBotMod.globalTick - f.comboUppercutStart > PvpBotMod.COMBO_UPPERCUT_WINDOW.asInt()
-                           || bot.isOnGround() && bot.getVelocity().y <= 0.0) {
-                           f.comboUppercutRising = false;
-                           bot.fallDistance = 0.0;
-                        }
-                     }
-
                      LivingEntity lastHitter = target.getAttacker();
                      int hitStamp = target.getLastAttackedTime();
                      if (lastHitter == bot && hitStamp != f.lastHitStamp) {
                         f.lastHitStamp = hitStamp;
-                        f.comboHitsStreak = 0;
-                        f.comboHitsThreshold = -1;
-                        BotSupport.startWebPlace(server, name, f, bot, target);
-                        BotSupport.maybeStartHitLava(f, bot, target);
-                        if (f.comboActive == 0
-                           && PvpBotMod.COMBO_CHANCE.value > 0.0
-                           && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.COMBO_CHANCE.value) {
-                           startCombo(f);
+                        f.hitsStreak = 0;
+                        f.hitsThreshold = -1;
+                        if (f.wallArmed && PvpBotMod.globalTick - f.wallArmTick <= 40) {
+                           f.wallArmed = false;
+                           f.wallNextRoll = PvpBotMod.globalTick + PvpBotMod.WALLWEB_COOLDOWN.asInt();
+                           BotSupport.startWallWeb(server, name, f, bot, target);
+                        } else {
+                           f.wallArmed = false;
+                           BotSupport.startWebPlace(server, name, f, bot, target);
+                           BotSupport.maybeStartHitLava(f, bot, target);
                         }
+
                      }
 
                      double thx = target.getX() - bot.getX();
@@ -6804,7 +6965,7 @@ final class Fighting {
                            && f.critChainUntil <= PvpBotMod.globalTick
                            && !ready
                            && dist <= PvpBotMod.SHIELD_RANGE.value
-                           && f.comboActive == 0
+                          
                            && bot.getEquippedStack(EquipmentSlot.OFFHAND).isOf(Items.SHIELD)
                            && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.SHIELD_CHANCE.value) {
                            BotSupport.run(server, "player " + name + " use continuous");
@@ -6845,7 +7006,8 @@ final class Fighting {
                            f.sprintHoldUntil = PvpBotMod.globalTick + 3;
                         } else {
                            boolean guaranteedWebCrit = PvpBotMod.WEB_CRIT.on() && BotSupport.inCobweb(target);
-                           boolean critPossible = PvpBotMod.CRIT_CHANCE.value > 0.0 && dist <= PvpBotMod.CRIT_RANGE.value;
+                           boolean sureCrit = !f.wallArmed && alwaysCritNow(bot, target, dist);
+                           boolean critPossible = (PvpBotMod.CRIT_CHANCE.value > 0.0 || sureCrit) && dist <= Math.max(PvpBotMod.CRIT_RANGE.value, 2.0);
                            if (ready && (reach <= PvpBotMod.ATTACK_RANGE.value || critPossible || guaranteedWebCrit || f.punishCrit)) {
                               if (f.reactAt < 0) {
                                  int lo = Math.min(PvpBotMod.REACT_MIN.asInt(), PvpBotMod.REACT_MAX.asInt());
@@ -6860,12 +7022,13 @@ final class Fighting {
                                  if (f.punishCrit) {
                                     tryCrit = bot.isOnGround() && !f.hopping;
                                     f.punishCrit = false;
-                                 } else if (guaranteedWebCrit) {
+                                 } else if (guaranteedWebCrit || sureCrit) {
                                     tryCrit = bot.isOnGround() && !f.hopping;
-                                 } else if (chaining) {
+                                 } else if (chaining && !f.wallArmed) {
                                     tryCrit = critPossible && bot.isOnGround() && !f.hopping;
                                  } else {
                                     tryCrit = critPossible
+                                       && !f.wallArmed
                                        && bot.isOnGround()
                                        && !f.hopping
                                        && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.CRIT_CHANCE.value;
@@ -6900,74 +7063,303 @@ final class Fighting {
       }
    }
 
-   static int pickComboType() {
-      if (PvpBotMod.COMBO_STAP_CHANCE.value > 0.0 && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.COMBO_STAP_CHANCE.value) {
-         return 0;
-      } else if (PvpBotMod.COMBO_WTAP_CHANCE.value > 0.0 && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.COMBO_WTAP_CHANCE.value) {
-         return 1;
-      } else if (PvpBotMod.COMBO_UPPERCUT_CHANCE.value > 0.0 && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.COMBO_UPPERCUT_CHANCE.value) {
-         return 2;
-      } else {
-         return PvpBotMod.COMBO_STRAFECOMBO_CHANCE.value > 0.0 && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.COMBO_STRAFECOMBO_CHANCE.value
-            ? 3
-            : 0;
-      }
-   }
-
-   static void startCombo(PvpBotMod.Fight f) {
-      boolean mixed = PvpBotMod.MIX_CHANCE.value > 0.0 && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.MIX_CHANCE.value;
-      f.comboActive = 1;
-      f.comboMixed = mixed;
-      f.comboMixHitsLeft = mixed ? Math.max(1, PvpBotMod.MIX_MAXHITS.asInt()) : Integer.MAX_VALUE;
-      f.comboType = pickComboType();
-   }
-
-   static void runComboStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, int type, boolean edgeBehind) {
+   /** D-tap: a short side-step right after a hit. */
+   static void runDTap(MinecraftServer server, String name, PvpBotMod.Fight f) {
       if (f.hopping) {
          BotSupport.run(server, "player " + name + " jump");
          f.hopping = false;
       }
 
-      switch (type) {
-         case 0:
-            if (!edgeBehind) {
-               BotSupport.run(server, "player " + name + " move backward");
-            } else {
-               BotSupport.run(server, "player " + name + " move");
-               f.strafeDir = 0;
-            }
+      f.strafeDir = f.strafeDir == 0 ? (ThreadLocalRandom.current().nextBoolean() ? 1 : -1) : -f.strafeDir;
+      BotSupport.run(server, "player " + name + " move " + (f.strafeDir > 0 ? "left" : "right"));
+      axisCmd(server, name, f);
+      f.paused = true;
+      f.pauseUntil = PvpBotMod.globalTick + Math.max(1, PvpBotMod.DTAP_TICKS.asInt());
+   }
 
-            f.paused = true;
-            f.pauseUntil = PvpBotMod.globalTick + Math.max(1, PvpBotMod.COMBO_TAP_TICKS.asInt());
-            break;
-         case 1:
-            BotSupport.run(server, "player " + name + " move");
-            f.strafeDir = 0;
-            f.paused = true;
-            f.pauseUntil = PvpBotMod.globalTick + Math.max(1, PvpBotMod.COMBO_TAP_TICKS.asInt());
-            break;
-         case 2:
-            double dx = target.getX() - bot.getX();
-            double dz = target.getZ() - bot.getZ();
-            double d2 = Math.sqrt(dx * dx + dz * dz);
-            if (bot.isOnGround() && d2 <= PvpBotMod.COMBO_UPPERCUT_RANGE.value) {
-               BotSupport.run(server, "player " + name + " sprint");
-               BotSupport.run(server, "player " + name + " move forward");
-               BotSupport.run(server, "player " + name + " jump once");
-               f.comboUppercutRising = true;
-               f.comboUppercutStart = PvpBotMod.globalTick;
-            }
-            break;
-         case 3:
-            f.strafeDir = f.strafeDir == 0 ? (ThreadLocalRandom.current().nextBoolean() ? 1 : -1) : -f.strafeDir;
-            BotSupport.run(server, "player " + name + " move " + (f.strafeDir > 0 ? "left" : "right"));
-            axisCmd(server, name, f);
-            f.paused = true;
-            f.pauseUntil = PvpBotMod.globalTick + Math.max(1, PvpBotMod.COMBO_STRAFE_SWITCH_TICKS.asInt());
+   /** another living player standing within 2.5 blocks of the target (the sweeping edge can reach it). */
+   static boolean otherEnemyNear(ServerPlayerEntity self, ServerPlayerEntity target) {
+      for (ServerPlayerEntity o : BotSupport.sw(target).getPlayers()) {
+         if (o != self && o != target && o.isAlive() && !o.isSpectator() && o.squaredDistanceTo(target) <= 6.25 && o.squaredDistanceTo(self) <= 12.0) {
+            return true;
+         }
+      }
+
+      return false;
+   }
+
+   /** the target swung at the bot and did not hurt it: hit back right away. */
+   static void mirrorPunishStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (PvpBotMod.MIRROR_PUNISH.value <= 0.0) {
+         return;
+      }
+
+      float prog = target.getHandSwingProgress(0.0F);
+      boolean started = prog > 0.0F && f.lastSwingProg <= 0.0F;
+      f.lastSwingProg = prog;
+      if (started && dist <= PvpBotMod.ATTACK_RANGE.value + 1.5) {
+         f.mirrorSwingTick = PvpBotMod.globalTick;
+         return;
+      }
+
+      if (f.mirrorSwingTick >= 0 && PvpBotMod.globalTick - f.mirrorSwingTick == 2) {
+         f.mirrorSwingTick = -100;
+         boolean whiffed = f.lastHurtTick < PvpBotMod.globalTick - 3;
+         double reach = BotSupport.reachDistance(bot, target);
+         if (whiffed
+            && f.phase == PvpBotMod.Phase.FIGHT
+            && bot.getAttackCooldownProgress(0.5F) >= 1.0F
+            && reach <= PvpBotMod.ATTACK_RANGE.value
+            && PvpBotMod.globalTick >= f.flinchUntil
+            && chance(PvpBotMod.MIRROR_PUNISH.value)) {
+            doAttack(server, name, f, target);
+            flog(f, "mirror punish: the target swung and missed");
+         }
       }
    }
 
-   static boolean startComboEscape(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
+   /** a target with a mace is diving at the bot: hold a totem in the main hand until it has landed. */
+   static void maceTotemStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
+      if (!PvpBotMod.MACE_TOTEM.on() || f.phase != PvpBotMod.Phase.FIGHT) {
+         return;
+      }
+
+      double hx = target.getX() - bot.getX();
+      double hz = target.getZ() - bot.getZ();
+      boolean threat = target.getMainHandStack().isOf(Items.MACE)
+         && !target.isOnGround()
+         && target.getY() > bot.getY() + 1.5
+         && Math.sqrt(hx * hx + hz * hz) <= PvpBotMod.MACE_FEAR_DIST.value + 2.0;
+      if (!threat) {
+         if (f.totemUntil > 0 && PvpBotMod.globalTick >= f.totemUntil) {
+            f.totemUntil = 0;
+            f.weaponSlot = -1;
+         }
+
+         return;
+      }
+
+      if (bot.getEquippedStack(EquipmentSlot.OFFHAND).isOf(Items.TOTEM_OF_UNDYING)) {
+         return;
+      }
+
+      if (f.totemUntil <= PvpBotMod.globalTick) {
+         int idx = BotSupport.findItemIndex(bot, Items.TOTEM_OF_UNDYING);
+         if (idx < 0) {
+            return;
+         }
+
+         int slot = BotSupport.toHotbar(bot, idx, BotSupport.findWeaponSlot(bot));
+         if (slot < 0) {
+            return;
+         }
+
+         BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+         flog(f, "mace dive incoming: totem in the main hand");
+      }
+
+      f.totemUntil = PvpBotMod.globalTick + 12;
+   }
+
+   // ---- ranged weapons: bow, crossbow, trident
+
+   static int rangedWeaponSlot(ServerPlayerEntity bot, PvpBotMod.Fight f) {
+      boolean arrows = BotSupport.findItemIndex(bot, Items.ARROW) >= 0;
+      int[] kinds = new int[]{0, 1, 2};
+      int start = ThreadLocalRandom.current().nextInt(3);
+      for (int k = 0; k < 3; k++) {
+         int kind = kinds[(start + k) % 3];
+         Item it = kind == 0 ? Items.BOW : kind == 1 ? Items.CROSSBOW : Items.TRIDENT;
+         if (kind != 2 && !arrows) {
+            continue;
+         }
+
+         int idx = BotSupport.findItemIndex(bot, it);
+         if (idx >= 0) {
+            int slot = BotSupport.toHotbar(bot, idx, BotSupport.findWeaponSlot(bot));
+            if (slot >= 0) {
+               f.rangedKind = kind;
+               return slot;
+            }
+         }
+      }
+
+      return -1;
+   }
+
+   static boolean rangedStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (PvpBotMod.RANGED_CHANCE.value <= 0.0 || PvpBotMod.globalTick < f.rangedNext || f.phase != PvpBotMod.Phase.FIGHT) {
+         return false;
+      }
+
+      if (dist < PvpBotMod.RANGED_MIN.value || dist > PvpBotMod.RANGED_MAX.value || !bot.canSee(target) || BotSupport.inCobweb(bot) || f.pathActive || f.blocking) {
+         return false;
+      }
+
+      f.rangedNext = PvpBotMod.globalTick + 20;
+      if (!chance(PvpBotMod.RANGED_CHANCE.value)) {
+         return false;
+      }
+
+      int slot = rangedWeaponSlot(bot, f);
+      if (slot < 0) {
+         return false;
+      }
+
+      BotSupport.run(server, "player " + name + " stop");
+      BotSupport.run(server, "player " + name + " unsprint");
+      clearFightFlags(f);
+      BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+      f.weaponSlot = -1;
+      f.phase = PvpBotMod.Phase.RANGED;
+      f.rangedStage = 0;
+      f.rangedStart = PvpBotMod.globalTick;
+      flog(f, "ranged attack with " + (f.rangedKind == 0 ? "bow" : f.rangedKind == 1 ? "crossbow" : "trident") + " at " + String.format(Locale.ROOT, "%.1f", dist) + " blocks");
+      return true;
+   }
+
+   static void endRanged(MinecraftServer server, String name, PvpBotMod.Fight f) {
+      BotSupport.run(server, "player " + name + " use");
+      BotSupport.run(server, "player " + name + " stop");
+      f.reset();
+      f.rangedNext = PvpBotMod.globalTick + PvpBotMod.RANGED_COOLDOWN.asInt();
+      f.weaponSlot = -1;
+   }
+
+   /** look at the target's chest with a lead for its movement and a drop for the projectile's fall. */
+   static void rangedAim(MinecraftServer server, String name, ServerPlayerEntity bot, ServerPlayerEntity target, PvpBotMod.Fight f, double dist) {
+      double speed = f.rangedKind == 2 ? 2.5 : 3.0;
+      double t = Math.max(1.0, dist / speed);
+      Vec3d v = target.getVelocity();
+      double tx = target.getX() + v.x * t;
+      double tz = target.getZ() + v.z * t;
+      double ty = target.getY() + target.getHeight() * 0.65 + 0.03 * t * t;
+      BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(tx) + " " + BotSupport.fmt(ty) + " " + BotSupport.fmt(tz));
+   }
+
+   static void rangedPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int elapsed = PvpBotMod.globalTick - f.rangedStart;
+      Item held = f.rangedKind == 0 ? Items.BOW : f.rangedKind == 1 ? Items.CROSSBOW : Items.TRIDENT;
+      if (elapsed > 90 || dist < PvpBotMod.RANGED_MIN.value - 3.0 || BotSupport.inCobweb(bot) || !bot.canSee(target)) {
+         endRanged(server, name, f);
+         return;
+      }
+
+      if (!bot.getMainHandStack().isOf(held)) {
+         if (elapsed > 6) {
+            endRanged(server, name, f);
+         }
+
+         return;
+      }
+
+      rangedAim(server, name, bot, target, f, dist);
+      int need = f.rangedKind == 0 ? 20 : f.rangedKind == 1 ? 26 : 12;
+      if (f.rangedStage == 0) {
+         BotSupport.run(server, "player " + name + " use continuous");
+         f.rangedStage = 1;
+         f.rangedStart = PvpBotMod.globalTick;
+      } else if (f.rangedStage == 1) {
+         if (elapsed >= need) {
+            BotSupport.run(server, "player " + name + " use");
+            if (f.rangedKind == 1) {
+               f.rangedStage = 2;
+               f.rangedStart = PvpBotMod.globalTick;
+            } else {
+               endRanged(server, name, f);
+            }
+         }
+      } else if (f.rangedStage == 2) {
+         if (elapsed >= 3) {
+            BotSupport.run(server, "player " + name + " use once");
+            BotSupport.swing(f);
+            f.rangedStage = 3;
+            f.rangedStart = PvpBotMod.globalTick;
+         }
+      } else if (elapsed >= 2) {
+         endRanged(server, name, f);
+      }
+   }
+
+   /** hit, back away, hit again: a short walk backwards right after a landed hit. */
+   static void runBackAway(MinecraftServer server, String name, PvpBotMod.Fight f, boolean edgeBehind) {
+      if (f.hopping) {
+         BotSupport.run(server, "player " + name + " jump");
+         f.hopping = false;
+      }
+
+      if (!edgeBehind) {
+         BotSupport.run(server, "player " + name + " move backward");
+      } else {
+         BotSupport.run(server, "player " + name + " move");
+         f.strafeDir = 0;
+      }
+
+      f.paused = true;
+      f.pauseUntil = PvpBotMod.globalTick + Math.max(1, PvpBotMod.BACKAWAY_TICKS.asInt());
+   }
+
+   /** the target is close, eating, or barely moving: every hit is a crit attempt. */
+   static boolean alwaysCritNow(ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (!PvpBotMod.ALWAYS_CRIT.on()) {
+         return false;
+      }
+
+      Vec3d v = target.getVelocity();
+      boolean still = Math.sqrt(v.x * v.x + v.z * v.z) <= PvpBotMod.ALWAYSCRIT_SPEED.value;
+      return dist <= PvpBotMod.ALWAYSCRIT_DIST.value || target.isUsingItem() || still;
+   }
+
+   /** a wall behind the target (seen from the bot) within the wall web distance. */
+   static boolean wallBehindTarget(ServerPlayerEntity bot, ServerPlayerEntity target) {
+      double dx = target.getX() - bot.getX();
+      double dz = target.getZ() - bot.getZ();
+      double len = Math.sqrt(dx * dx + dz * dz);
+      if (len < 0.3) {
+         return false;
+      }
+
+      dx /= len;
+      dz /= len;
+      World level = BotSupport.sw(target);
+      double headY = target.getY() + 1.0;
+      for (double st = 0.5; st <= PvpBotMod.WALLWEB_DIST.value + 0.5; st += 0.5) {
+         BlockPos cell = BlockPos.ofFloored(target.getX() + dx * st, headY, target.getZ() + dz * st);
+         if (!level.getBlockState(cell).getCollisionShape(level, cell).isEmpty()) {
+            return true;
+         }
+      }
+
+      return false;
+   }
+
+   /** per tick while fighting: roll the wall web once in a while when a wall is behind the target. */
+   static void wallWebArm(ServerPlayerEntity bot, ServerPlayerEntity target, PvpBotMod.Fight f, double dist) {
+      if (f.wallArmed) {
+         if (PvpBotMod.globalTick - f.wallArmTick > 40 || !wallBehindTarget(bot, target)) {
+            f.wallArmed = false;
+         }
+
+         return;
+      }
+
+      if (PvpBotMod.WALLWEB_CHANCE.value <= 0.0
+         || PvpBotMod.globalTick < f.wallNextRoll
+         || f.placeStage != 0
+         || dist > PvpBotMod.ATTACK_RANGE.value + 1.5
+         || BotSupport.findItemIndex(bot, Items.COBWEB) < 0
+         || BotSupport.inCobweb(target)) {
+         return;
+      }
+
+      f.wallNextRoll = PvpBotMod.globalTick + 20;
+      if (wallBehindTarget(bot, target) && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.WALLWEB_CHANCE.value) {
+         f.wallArmed = true;
+         f.wallArmTick = PvpBotMod.globalTick;
+      }
+   }
+
+   static boolean startHitsEscape(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
       if (startElyEscape(server, name, f, bot, target)) {
          return true;
       }
@@ -6975,7 +7367,7 @@ final class Fighting {
       boolean hasWind = BotSupport.findItemIndex(bot, Items.WIND_CHARGE) >= 0;
       boolean hasPearl = BotSupport.findItemIndex(bot, Items.ENDER_PEARL) >= 0;
       boolean hasWeb = BotSupport.countItem(bot, Items.COBWEB) >= Math.max(2, PvpBotMod.WEBTRAP_COUNT.asInt());
-      if (PvpBotMod.COMBOHITS_WINDCHARGECHANCE.value > 0.0 && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.COMBOHITS_WINDCHARGECHANCE.value) {
+      if (PvpBotMod.HITSESC_WINDCHARGECHANCE.value > 0.0 && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.HITSESC_WINDCHARGECHANCE.value) {
          if (hasWind && startWindEscape(server, name, f, bot, target)) {
             return true;
          }
@@ -6986,11 +7378,11 @@ final class Fighting {
       }
 
       if (hasWeb
-         && PvpBotMod.COMBOHITS_WEBCHANCE.value > 0.0
-         && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.COMBOHITS_WEBCHANCE.value
+         && PvpBotMod.HITSESC_WEBCHANCE.value > 0.0
+         && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.HITSESC_WEBCHANCE.value
          && startWebTrap(server, name, f, bot, target)) {
          return true;
-      } else if (PvpBotMod.COMBOHITS_RUNCHANCE.value > 0.0 && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.COMBOHITS_RUNCHANCE.value) {
+      } else if (PvpBotMod.HITSESC_RUNCHANCE.value > 0.0 && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.HITSESC_RUNCHANCE.value) {
          startFlee(server, name, f, 0);
          return true;
       } else {
@@ -7136,8 +7528,8 @@ final class Fighting {
       BlockPos base = target.getBlockPos();
       BlockPos best = null;
       double bestScore = Double.MAX_VALUE;
-      for (int dx = -1; dx <= 1; dx++) {
-         for (int dz = -1; dz <= 1; dz++) {
+      for (int dx = -2; dx <= 2; dx++) {
+         for (int dz = -2; dz <= 2; dz++) {
             BlockPos c = base.add(dx, 0, dz);
             BlockPos floor = c.down();
             if (!w.getBlockState(c).isAir() || !w.getBlockState(c.up()).isAir() || !w.getBlockState(floor).isFullCube(w, floor)) {
@@ -7147,12 +7539,16 @@ final class Fighting {
             double px = c.getX() + 0.5;
             double pz = c.getZ() + 0.5;
             double dBot = Math.sqrt((bot.getX() - px) * (bot.getX() - px) + (bot.getEyeY() - c.getY()) * (bot.getEyeY() - c.getY()) + (bot.getZ() - pz) * (bot.getZ() - pz));
-            if (dBot > 4.3) {
+            if (dBot > 4.5) {
                continue;
             }
 
             double dTarget = Math.sqrt((target.getX() - px) * (target.getX() - px) + (target.getZ() - pz) * (target.getZ() - pz));
-            double score = dTarget - 0.05 * dBot;
+            if (dTarget > 2.5) {
+               continue;
+            }
+
+            double score = dTarget + (dBot < 3.0 ? (3.0 - dBot) * 0.6 : 0.0);
             if (score < bestScore) {
                bestScore = score;
                best = c;
@@ -7238,25 +7634,46 @@ final class Fighting {
       return Math.toDegrees(Math.atan2(-(toX - fromX), toZ - fromZ));
    }
 
-   /** random trigger: once a second, when the bot carries the kit and the target is close (more likely while it is webbed or eating). */
+   /** vexbot style doctrine: checked once a second. Finish window (target low), punish (webbed, eating, bow, just pearled) or a rare random cart. */
    static boolean tntCartStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
       if (!PvpBotMod.TNT_CART.on() || PvpBotMod.globalTick < f.nextTntTick) {
          return false;
       }
 
       f.nextTntTick = PvpBotMod.globalTick + 20;
-      if (dist > 4.5 || !bot.isOnGround() || bot.getHealth() + bot.getAbsorptionAmount() < 8.0 || tntKitMissing(bot) != null) {
+      double selfHp = bot.getHealth() + bot.getAbsorptionAmount();
+      double tgtHp = target.getHealth() + target.getAbsorptionAmount();
+      boolean finish = tgtHp <= PvpBotMod.CART_FINISH_HP.value;
+      if (dist > 5.5 || !bot.isOnGround() || selfHp < (finish ? 6.0 : PvpBotMod.CART_MIN_HP.value) || tntKitMissing(bot) != null) {
+         return false;
+      }
+
+      // too close with low health: the blast would hurt the bot too
+      double minDist = selfHp >= 16.0 ? 3.0 : selfHp >= 10.0 ? 4.0 : 5.0;
+      if (finish && selfHp < 10.0 && dist < 2.5 && !BotSupport.inCobweb(target)) {
          return false;
       }
 
       boolean webbed = BotSupport.inCobweb(target);
       boolean eating = target.isUsingItem() && !target.isBlocking() && target.getActiveItem().get(DataComponentTypes.FOOD) != null;
-      double pct = webbed || eating ? PvpBotMod.TNT_CART_CHANCE.value : PvpBotMod.TNT_CART_CHANCE.value / 10.0;
-      return chance(pct) && startTntCart(server, name, f, bot, target) == null;
+      boolean bowing = target.isUsingItem() && target.getActiveItem().isOf(Items.BOW);
+      boolean punish = PvpBotMod.CART_PUNISH.on() && (webbed || eating || bowing || target.getItemCooldownManager().isCoolingDown(Items.ENDER_PEARL.getDefaultStack()));
+      double pct = finish ? 60.0 : punish ? PvpBotMod.TNT_CART_CHANCE.value : PvpBotMod.TNT_CART_CHANCE.value / 10.0;
+      if (!chance(pct) || minDist > 5.0) {
+         return false;
+      }
+
+      int mode = PvpBotMod.CART_MODE.asInt();
+      boolean insta = mode == 2 || (mode == 0 && (finish || webbed || eating) && selfHp >= 14.0);
+      return startTntCart(server, name, f, bot, target, insta) == null;
+   }
+
+   static String startTntCart(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
+      return startTntCart(server, name, f, bot, target, PvpBotMod.CART_MODE.asInt() == 2);
    }
 
    /** null = started, else the reason it cannot. */
-   static String startTntCart(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
+   static String startTntCart(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, boolean insta) {
       String missing = tntKitMissing(bot);
       if (missing != null) {
          return missing;
@@ -7283,6 +7700,7 @@ final class Fighting {
       f.tntStart = PvpBotMod.globalTick;
       f.tntRail = cell;
       f.tntShots = 0;
+      f.tntInsta = insta;
       flog(f, "tnt cart start: rail cell " + cell.getX() + " " + cell.getY() + " " + cell.getZ());
       return null;
    }
@@ -7378,6 +7796,11 @@ final class Fighting {
                   break;
                }
 
+               if (f.tntInsta && tntBeginDraw(server, name, f, bot, cart)) {
+                  flog(f, "insta cart: drawing at once");
+                  break;
+               }
+
                // both are down: back away from the cart, facing away from it
                BotSupport.run(server, "player " + name + " look " + String.format(Locale.ROOT, "%.1f 0", yawTo(cart.getX(), cart.getZ(), bot.getX(), bot.getZ())));
                BotSupport.run(server, "player " + name + " move forward");
@@ -7436,7 +7859,7 @@ final class Fighting {
             BotSupport.run(server, "player " + name + " look " + String.format(Locale.ROOT, "%.2f %.2f", yawTo(bot.getX(), bot.getZ(), at.x, at.z), pitch));
             if (elapsed >= f.tntDraw + 1) {
                double tDist = Math.sqrt((target.getX() - cart.getX()) * (target.getX() - cart.getX()) + (target.getZ() - cart.getZ()) * (target.getZ() - cart.getZ()));
-               if (bot.distanceTo(cart) < PvpBotMod.TNT_SAFE_DIST.value - 0.5) {
+               if (!f.tntInsta && bot.distanceTo(cart) < PvpBotMod.TNT_SAFE_DIST.value - 0.5) {
                   // too close to the blast: stop drawing and back off again
                   BotSupport.run(server, "player " + name + " stop");
                   BotSupport.run(server, "player " + name + " look " + String.format(Locale.ROOT, "%.1f 0", yawTo(cart.getX(), cart.getZ(), bot.getX(), bot.getZ())));
@@ -7458,6 +7881,15 @@ final class Fighting {
             break;
          }
          case 7:
+            if (f.tntInsta && elapsed == 1) {
+               Entity c2 = findTntCart(bot, rail);
+               if (c2 != null) {
+                  BotSupport.run(server, "player " + name + " look " + String.format(Locale.ROOT, "%.1f 0", yawTo(c2.getX(), c2.getZ(), bot.getX(), bot.getZ())));
+                  BotSupport.run(server, "player " + name + " move forward");
+                  BotSupport.run(server, "player " + name + " sprint");
+               }
+            }
+
             if (elapsed >= 2) {
                Entity cart = findTntCart(bot, rail);
                if (cart == null) {
@@ -7585,7 +8017,7 @@ final class Fighting {
          f.fallRoll = 0;
          f.fallHoldUntil = 0;
          return false;
-      } else if (PvpBotMod.FALL_SHIELD_CHANCE.value <= 0.0 || tradeMace(bot)) {
+      } else if (tradeMace(bot)) {
          return false;
       } else {
          int now = PvpBotMod.globalTick;
@@ -7609,7 +8041,7 @@ final class Fighting {
             return false;
          } else {
             if (f.fallRoll == 0) {
-               f.fallRoll = ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.FALL_SHIELD_CHANCE.value ? 2 : 1;
+               f.fallRoll = 2;
                f.fallHoldUntil = now + 100;
             }
 
@@ -7625,7 +8057,7 @@ final class Fighting {
          return false;
       }
 
-      if (PvpBotMod.FALL_BACK_CHANCE.value <= 0.0 || f.dodgeRolled || PvpBotMod.globalTick < f.nextDodgeTick || !bot.isOnGround() || BotSupport.inCobweb(bot) || tradeMace(bot)) {
+      if (f.dodgeRolled || PvpBotMod.globalTick < f.nextDodgeTick || !bot.isOnGround() || BotSupport.inCobweb(bot) || tradeMace(bot)) {
          return false;
       }
 
@@ -7642,9 +8074,6 @@ final class Fighting {
       }
 
       f.dodgeRolled = true;
-      if (!chance(PvpBotMod.FALL_BACK_CHANCE.value)) {
-         return false;
-      }
 
       BotSupport.run(server, "player " + name + " stop");
       BotSupport.run(server, "player " + name + " unsprint");
@@ -7807,9 +8236,6 @@ final class Fighting {
    static boolean maceFearStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
       if (tradeMace(bot) || !PvpBotMod.MACE_FEAR.on() || PvpBotMod.globalTick < f.nextFearTick || dist > PvpBotMod.MACE_FEAR_DIST.value || !targetMaceThreat(bot, target)) {
          return false;
-      } else if (!(ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.MACE_FEAR_CHANCE.value)) {
-         f.nextFearTick = PvpBotMod.globalTick + 40;
-         return false;
       } else {
          return beginMaceFear(server, name, f, bot);
       }
@@ -7842,8 +8268,6 @@ final class Fighting {
       f.strafeDir = 0;
       f.attackTick = -1;
       f.edgeHold = false;
-      f.comboActive = 0;
-      f.comboUppercutRising = false;
       f.keepMode = 0;
    }
 
@@ -8846,7 +9270,6 @@ final class Fighting {
 
       if (PvpBotMod.globalTick < f.baitNext
          || f.phase != PvpBotMod.Phase.FIGHT
-         || f.comboActive != 0
          || f.crit
          || f.blocking
          || f.axeMode
@@ -9053,8 +9476,6 @@ final class Fighting {
          f.strafeDir = 0;
          f.attackTick = -1;
          f.edgeHold = false;
-         f.comboActive = 0;
-         f.comboUppercutRising = false;
          return true;
       }
    }
@@ -9938,8 +10359,6 @@ final class Fighting {
          f.strafeDir = 0;
          f.attackTick = -1;
          f.edgeHold = false;
-         f.comboActive = 0;
-         f.comboUppercutRising = false;
          f.keepMode = 0;
          return true;
       }
@@ -10384,8 +10803,6 @@ final class Fighting {
       f.strafeDir = 0;
       f.attackTick = -1;
       f.edgeHold = false;
-      f.comboActive = 0;
-      f.comboUppercutRising = false;
       f.keepMode = 0;
       return true;
    }
@@ -11174,8 +11591,8 @@ final class Fighting {
       if (now % 5 == 0) {
          double mx = bot.getX() - f.pathLastX;
          double mz = bot.getZ() - f.pathLastZ;
-         // only count "not moving" while the bot is really trying to advance (not blocking, tapping, strafing, comboing or going for a crit)
-         boolean advancing = f.keepMode > 0 && !f.paused && !f.blocking && !f.crit && !f.edgeHold && f.strafeDir == 0 && f.comboActive == 0;
+         // only count "not moving" while the bot is really trying to advance (not blocking, backing away, strafing or going for a crit)
+         boolean advancing = f.keepMode > 0 && !f.paused && !f.blocking && !f.crit && !f.edgeHold && f.strafeDir == 0;
          boolean trying = f.pathActive || advancing;
          f.pathStuck = trying && !Double.isNaN(f.pathLastX) && mx * mx + mz * mz < 0.0036 && dist > PvpBotMod.ATTACK_RANGE.value + 1.5
             ? f.pathStuck + 5
@@ -11238,7 +11655,6 @@ final class Fighting {
          f.pathMoving = false;
          f.strafeDir = 0;
          f.hopping = false;
-         f.comboActive = 0;
          f.paused = false;
          f.crit = false;
          if (wasHopping) {
@@ -12242,6 +12658,13 @@ final class Gui {
    static final String ARENA_PAGE = "Crowd & Ladder";
    static final String TEAMS_PAGE = "Team Tournament";
    static final String KITS_PAGE = "Kits";
+   static final String HUB_PAGE = "Hub";
+   static final String DIFF_PAGE = "Difficulty";
+   private static final String[] SETTINGS_ORDER = new String[]{
+      "Combat", "Sword Tech", "Human Mistakes", "Shield", "Eating", "Escape", "Webs", "Potions & Items",
+      "Wind & Mace", "Mace Pressure", "Ranged", "Fall & Swap", "Elytra", "Pillar & Climb", "Pathfinding", "Team & FFA", "TNT Cart", "Tiers", "Debug"
+   };
+   private static final String[] MODE_ORDER = new String[]{FFA_PAGE, TOUR_PAGE, ARENA_PAGE, TEAMS_PAGE, KITS_PAGE, TEST_PAGE};
 
    private Gui() {
    }
@@ -12266,7 +12689,22 @@ final class Gui {
          return i;
       }
 
-      String c = CATEGORY.get(o.cmd);
+      String k = o.cmd;
+      if (k.startsWith("pearl")) {
+         return Items.ENDER_PEARL;
+      } else if (k.startsWith("bait")) {
+         return Items.FISHING_ROD;
+      } else if (k.startsWith("ffa") || k.startsWith("lootchest")) {
+         return Items.CHEST;
+      } else if (k.endsWith("ticks") || k.endsWith("cooldown") || k.endsWith("delay") || k.endsWith("seconds") || k.endsWith("interval") || k.endsWith("window")) {
+         return Items.CLOCK;
+      } else if (k.endsWith("hearts") || k.endsWith("hp")) {
+         return Items.APPLE;
+      } else if (k.endsWith("dist") || k.endsWith("radius") || k.endsWith("reach") || k.endsWith("height")) {
+         return Items.SPYGLASS;
+      }
+
+      String c = CATEGORY.get(k);
       return c == null ? Items.PAPER : CAT_ICON.getOrDefault(c, Items.PAPER);
    }
 
@@ -12278,10 +12716,40 @@ final class Gui {
 
    private static List<String> pageNames() {
       List<String> pages = new ArrayList<>();
-      pages.add("Difficulty & Playstyle");
-      pages.addAll(CATEGORY_ORDER);
-      pages.add(TEST_PAGE);
+      pages.add(HUB_PAGE);
+      pages.add(DIFF_PAGE);
+      pages.addAll(settingPages());
+      for (String m : MODE_ORDER) {
+         pages.add(m);
+      }
+
       return pages;
+   }
+
+   private static boolean isModePage(String name) {
+      return Arrays.asList(MODE_ORDER).contains(name);
+   }
+
+   /** the settings pages (option lists only), in menu order. */
+   private static List<String> settingPages() {
+      List<String> list = new ArrayList<>();
+      for (String c : SETTINGS_ORDER) {
+         if (CATEGORY_ORDER.contains(c)) {
+            list.add(c);
+         }
+      }
+
+      for (String c : CATEGORY_ORDER) {
+         if (!list.contains(c) && !isModePage(c)) {
+            list.add(c);
+         }
+      }
+
+      return list;
+   }
+
+   private static int pageIndex(String name) {
+      return Math.max(0, pageNames().indexOf(name));
    }
 
    /** option categories of the settings menu, for the tier settings menu. */
@@ -12320,6 +12788,11 @@ final class Gui {
 
    static void open(ServerPlayerEntity player) {
       player.openHandledScreen(new SimpleNamedScreenHandlerFactory((syncId, inv, p) -> new Gui.GuiMenu(syncId), Text.literal("PvpBot Settings")));
+   }
+
+   static void openSettings(ServerPlayerEntity player) {
+      final int start = pageIndex(settingPages().isEmpty() ? HUB_PAGE : settingPages().get(0));
+      player.openHandledScreen(new SimpleNamedScreenHandlerFactory((syncId, inv, p) -> new Gui.GuiMenu(syncId, start), Text.literal("PvpBot Settings")));
    }
 
    static void openArena(ServerPlayerEntity player) {
@@ -12389,13 +12862,23 @@ final class Gui {
          "punishcritchance",
          "recoverychance",
          "totempunishticks",
-         "archerrush"
+         "archerrush",
+         "backawaychance",
+         "backawayticks",
+         "dtapchance",
+         "dtapticks",
+         "sweephit",
+         "mirrorpunish",
+         "alwayscrit",
+         "alwayscritdist",
+         "alwayscritspeed",
+         "turnspeed"
       );
       cat("Tournament", "tourtime", "tourfreeze", "tourbreak");
       cat("Crowd & Ladder", "arenacount", "crowdradius", "crowdchat", "arguechance", "arenagap", "arenaring", "specjump", "specswing", "speccheer", "cheerseconds", "arenabreak", "titleseconds");
       cat("Team Tournament");
       cat("Kits");
-      catIcon("Kits", Items.CHEST);
+      catIcon("Kits", Items.ENDER_CHEST);
       catIcon("Tournament", Items.TOTEM_OF_UNDYING);
       cat("Eating", "eat", "eatspread", "eatoddchance", "eatcount", "eatuntil", "hungereat", "eatfullspeed", "flee", "revenge", "eatknockback", "eatknockbackticks");
       cat(
@@ -12412,25 +12895,10 @@ final class Gui {
          "maceaware"
       );
       cat(
-         "Combo",
-         "combochance",
-         "combostap",
-         "combowtap",
-         "combouppercut",
-         "combostrafecombo",
-         "combotapticks",
-         "uppercutrange",
-         "uppercutwindow",
-         "combostrafeticks",
-         "mixchance",
-         "mixmaxhits",
-         "mixswitchchance"
-      );
-      cat(
          "Escape",
-         "combohitsmin",
-         "combohitsmax",
-         "combohitsescapechance",
+         "hitsescapemin",
+         "hitsescapemax",
+         "hitsescapechance",
          "windchargechance",
          "windchargehealchance",
          "blockrunchance",
@@ -12449,6 +12917,9 @@ final class Gui {
          "webfightback",
          "webfightbackticks",
          "hitweb",
+         "wallwebchance",
+         "wallwebdist",
+         "wallwebcooldown",
          "webcrit",
          "webavoid",
          "webtime",
@@ -12518,8 +12989,9 @@ final class Gui {
          "precisionlock"
       );
       cat("Team & FFA", "callouts", "callpop", "callcrit", "callarmor", "callfood", "callcrithearts", "callcritseconds", "callarmorseconds", "callfoodrun", "tactics", "tacgang", "tachelp", "tacbalance", "focuschance", "focusmin", "focusmax", "taunts", "ffaleave", "opsonly", "voidaware");
-      cat("Wind & Mace", "windclimb", "windclimbheight", "windmacechance", "windmacehearts", "windmacecooldown", "finishmacechance", "adapthits", "adaptmacechance", "adaptmacemin", "adaptmacemax", "fallbackchance", "windjumpdelay", "windjumpchance", "macetrade", "maceoutnumbered", "maceoutnumberedcount", "maceoutnumberedboost", "healabort", "windcounter", "windcounterchance", "windcounterrange", "windcountercooldown", "macefear", "macefearchance", "macefearrun", "macefearradius", "macefeardist", "fallshieldchance");
-      cat("Mace Pressure", "maceretry", "maceretrymax", "macechaingap", "macepressure", "macepressurerange", "webmace", "macekeepdist", "maceaimerror", "macemistake", "windjumplatechance", "windjumplatemax", "divelead");
+      cat("Wind & Mace", "windclimb", "windclimbheight", "windmacechance", "windmacehearts", "windmacecooldown", "finishmacechance", "adapthits", "adaptmacechance", "adaptmacemin", "adaptmacemax", "windjumpdelay", "windjumpchance", "macetrade", "maceoutnumbered", "maceoutnumberedcount", "maceoutnumberedboost", "healabort", "windcounter", "windcounterchance", "windcounterrange", "windcountercooldown", "macefear", "macefearrun", "macefearradius", "macefeardist");
+      cat("Mace Pressure", "macefinishaggro", "macefinishhearts", "macetotem", "maceretry", "maceretrymax", "macechaingap", "macepressure", "macepressurerange", "webmace", "macekeepdist", "maceaimerror", "macemistake", "windjumplatechance", "windjumplatemax", "divelead");
+      cat("Ranged", "rangedchance", "rangedmin", "rangedmax", "rangedcooldown");
       cat("Sword Tech", "jumpresetwindow", "jumpresetrange", "lowfightchance", "prep", "prepgapples", "prepdist", "prepaxe", "baitchance", "baitticks", "baitcooldown", "pearlaggro", "pearlaggromin", "pearlaggrocd", "pearlaggrohearts");
       cat("Elytra", "elytrachance", "elytramaxglides", "elytraburstchance", "elytradisengage", "elytrareach", "elytradurability", "elytraescapechance", "elytraescapedist", "elytrachasechance", "elytrachasedist", "elytrachaseclose", "elytraboosts", "elytratakeoff");
       cat("Pathfinding", "pathfind", "pathmode", "pathrange", "pathnodes", "pathreplan", "pathbudget", "pathdrop", "pathwiden", "pathdeadmem", "pathcloserange", "pathdelay", "gotonodes", "gotobudget", "pathhop");
@@ -12527,7 +12999,7 @@ final class Gui {
       cat("Pillar & Climb", "pillar", "pillarmax", "pillarmaxheight", "pillarcooldown", "climbcombo");
       cat("Debug", "fightlog");
       cat("Tiers", "nametagtiers");
-      cat("TNT Cart", "tntcart", "tntcartchance", "tntcartsafedist", "tntcartdrawticks", "tntcartcooldown");
+      cat("TNT Cart", "tntcart", "tntcartchance", "cartmode", "cartfinishhp", "cartminhp", "cartpunish", "tntcartsafedist", "tntcartdrawticks", "tntcartcooldown");
       cat("Fall & Swap", "fallmace", "fallmacechance", "fallmaceheight", "fallclutch", "clutchheight", "clutchsuccess", "maceswap", "maceswapchance", "spearswap", "spearswapchance", "spearreach");
       icon(
          Items.DIAMOND_SWORD,
@@ -12548,7 +13020,7 @@ final class Gui {
       icon(Items.LEATHER_BOOTS, "keepdistance", "keepdistancemax", "pressurekeep", "strafeticks", "strafechance", "hopstop");
       icon(Items.SPECTRAL_ARROW, "archerrush");
       icon(Items.NAME_TAG, "nametagtiers");
-      icon(Items.TNT_MINECART, "tntcart", "tntcartchance", "tntcartsafedist", "tntcartdrawticks", "tntcartcooldown");
+      icon(Items.TNT_MINECART, "tntcart", "tntcartchance", "cartmode", "cartfinishhp", "cartminhp", "cartpunish", "tntcartsafedist", "tntcartdrawticks", "tntcartcooldown");
       icon(Items.GOLDEN_APPLE, "eat", "eatspread", "eatoddchance", "eatcount", "eatuntil", "hungereat", "flee", "eatknockback", "eatknockbackticks");
       icon(
          Items.SHIELD,
@@ -12563,16 +13035,23 @@ final class Gui {
          "stunslam",
          "maceaware"
       );
-      icon(Items.PISTON, "combostap", "combowtap", "combotapticks");
-      icon(Items.FEATHER, "combouppercut", "uppercutrange", "uppercutwindow");
-      icon(Items.LEATHER_BOOTS, "combostrafecombo", "combostrafeticks");
-      icon(Items.GOLDEN_SWORD, "combochance", "mixchance", "mixmaxhits", "mixswitchchance");
+      icon(Items.GOLDEN_SWORD, "backawaychance", "backawayticks", "alwayscrit", "alwayscritdist", "alwayscritspeed");
+      icon(Items.COBWEB, "wallwebchance", "wallwebdist", "wallwebcooldown");
+      icon(Items.ENDER_EYE, "turnspeed");
+      icon(Items.LEATHER_BOOTS, "dtapchance", "dtapticks");
+      icon(Items.IRON_SWORD, "sweephit", "mirrorpunish");
+      icon(Items.TOTEM_OF_UNDYING, "macetotem");
+      icon(Items.BOW, "rangedchance", "rangedmin", "rangedmax", "rangedcooldown");
+      icon(Items.MACE, "macefinishaggro", "macefinishhearts");
       icon(Items.COBBLESTONE, "blockrunchance", "blockrundist", "blockrundouble", "blockrunmax");
       icon(Items.WIND_CHARGE, "windchargechance", "windchargehealchance", "windchargewaitticks", "windchargeblockedticks");
-      icon(Items.ENDER_PEARL, "combohitsmin", "combohitsmax", "combohitsescapechance", "escaperunchance");
+      icon(Items.ENDER_PEARL, "hitsescapemin", "hitsescapemax", "hitsescapechance", "escaperunchance");
       icon(
          Items.COBWEB,
          "hitweb",
+         "wallwebchance",
+         "wallwebdist",
+         "wallwebcooldown",
          "webtime",
          "webleadticks",
          "webzoneradius",
@@ -12617,28 +13096,31 @@ final class Gui {
       icon(Items.LADDER, "pillarmaxheight");
       icon(Items.SCAFFOLDING, "climbcombo");
       icon(Items.WRITABLE_BOOK, "fightlog");
-      catIcon("Difficulty & Playstyle", Items.NETHER_STAR);
-      catIcon("Combat", Items.DIAMOND_SWORD);
+      catIcon(HUB_PAGE, Items.NETHER_STAR);
+      catIcon(DIFF_PAGE, Items.DRAGON_HEAD);
+      catIcon("Combat", Items.NETHERITE_SWORD);
       catIcon("Eating", Items.GOLDEN_APPLE);
       catIcon("Shield", Items.SHIELD);
-      catIcon("Combo", Items.GOLDEN_SWORD);
       catIcon("Escape", Items.ENDER_PEARL);
       catIcon("Webs", Items.COBWEB);
       catIcon("Potions & Items", Items.SPLASH_POTION);
-      catIcon("Human Mistakes", Items.SPIDER_EYE);
-      catIcon("Team & FFA", Items.WHITE_BANNER);
+      catIcon("Human Mistakes", Items.FERMENTED_SPIDER_EYE);
+      catIcon("Team & FFA", Items.GOAT_HORN);
       catIcon("Wind & Mace", Items.WIND_CHARGE);
       catIcon("Mace Pressure", Items.MACE);
       catIcon("Crowd & Ladder", Items.PLAYER_HEAD);
       catIcon("Team Tournament", Items.WHITE_BANNER);
-      catIcon("Sword Tech", Items.DIAMOND_SWORD);
+      catIcon("Sword Tech", Items.IRON_SWORD);
       catIcon("Elytra", Items.ELYTRA);
-      catIcon("Pathfinding", Items.COMPASS);
-      catIcon("Fall & Swap", Items.WATER_BUCKET);
-      catIcon("Pillar & Climb", Items.COBBLESTONE);
+      catIcon("Ranged", Items.BOW);
+      catIcon("Pathfinding", Items.FILLED_MAP);
+      catIcon("Fall & Swap", Items.FEATHER);
+      catIcon("Pillar & Climb", Items.LADDER);
+      catIcon("TNT Cart", Items.TNT_MINECART);
+      catIcon("Tiers", Items.NAME_TAG);
       catIcon("FFA & Loot", Items.CHEST);
-      catIcon("Debug", Items.WRITABLE_BOOK);
-      catIcon(TEST_PAGE, Items.TNT);
+      catIcon("Debug", Items.RECOVERY_COMPASS);
+      catIcon(TEST_PAGE, Items.COMMAND_BLOCK);
       icon(Items.COMPASS, "pathfind", "pathmode", "pathrange", "pathnodes", "pathreplan", "pathbudget", "pathdrop");
       icon(Items.LAVA_BUCKET, "lavaweb", "lavawebchance", "lavawebticks", "lavawebrepeats", "lavawebside", "lavawebback");
       icon(Items.WATER_BUCKET, "fallmace", "fallmacechance", "fallmaceheight", "fallclutch", "clutchheight", "clutchsuccess", "maceswap", "maceswapchance", "spearswap", "spearswapchance", "spearreach");
@@ -12699,6 +13181,10 @@ final class Gui {
                } else if (slotId == 49) {
                   this.indexMode = !this.indexMode;
                   this.render();
+               } else if (slotId == 47 && !Gui.pageNames().get(this.page).equals(Gui.HUB_PAGE)) {
+                  this.page = 0;
+                  this.indexMode = false;
+                  this.render();
                } else if (this.indexMode) {
                   if (slotId < Gui.pageNames().size()) {
                      this.page = slotId;
@@ -12711,7 +13197,10 @@ final class Gui {
                   boolean shift = clickType == SlotActionType.QUICK_MOVE;
                   boolean reset = clickType == SlotActionType.CLONE || clickType == SlotActionType.THROW || clickType == SlotActionType.SWAP;
                   String pageName = Gui.pageNames().get(this.page);
-                  if (this.page == 0) {
+                  if (pageName.equals(Gui.HUB_PAGE)) {
+                     this.handleHubClick(sp, slotId);
+                     return;
+                  } else if (pageName.equals(Gui.DIFF_PAGE)) {
                      this.handlePresetClick(slotId);
                   } else if (pageName.equals(Gui.TEST_PAGE)) {
                      this.handleTestClick(sp, slotId);
@@ -13030,6 +13519,26 @@ final class Gui {
          }
       }
 
+      private void handleHubClick(ServerPlayerEntity sp, int slotId) {
+         int target = -1;
+         if (slotId == 19) {
+            target = Gui.pageIndex(Gui.DIFF_PAGE);
+         } else if (slotId == 21) {
+            List<String> sp2 = Gui.settingPages();
+            target = Gui.pageIndex(sp2.isEmpty() ? Gui.HUB_PAGE : sp2.get(0));
+         } else if (slotId == 23) {
+            Tiers.openPicker(sp);
+            return;
+         } else if (slotId == 25) {
+            target = Gui.pageIndex(Gui.FFA_PAGE);
+         }
+
+         if (target >= 0) {
+            this.page = target;
+            this.render();
+         }
+      }
+
       private void handlePresetClick(int slotId) {
          if (slotId >= 9 && slotId < 9 + PvpBotMod.LEVEL_NAMES.length) {
             PvpBotMod.setDifficultyLevel(slotId - 9);
@@ -13049,6 +13558,9 @@ final class Gui {
          this.container.setStack(49, labelItem(pageIcon, "§e" + pageName, List.of("§7Page " + (this.page + 1) + " of " + pages.size(), "§bClick to open the page list")));
          this.container.setStack(45, labelItem(Items.ARROW, "§f<- Previous page", List.of()));
          this.container.setStack(53, labelItem(Items.ARROW, "§fNext page ->", List.of()));
+         if (!pageName.equals(Gui.HUB_PAGE)) {
+            this.container.setStack(47, labelItem(Items.NETHER_STAR, "§bBack to the hub", List.of("§7Difficulty, Settings, Tiers, Modes")));
+         }
          if (this.indexMode) {
             for (int i = 0; i < pages.size() && i < 45; i++) {
                String pn = pages.get(i);
@@ -13058,31 +13570,43 @@ final class Gui {
             return;
          }
 
-         if (this.page == 0) {
+         if (pageName.equals(Gui.HUB_PAGE)) {
+            this.container.setStack(19, labelItem(Items.DRAGON_HEAD, "§6Difficulty", List.of("§7Pick how good the bots are (beginner to perfect)", "§7and their playstyle (aggressive, defensive, pressure).", "§7Current: §f" + PvpBotMod.difficultyName + " / " + PvpBotMod.playstyleName, "§eClick to open")));
+            this.container.setStack(21, labelItem(Items.COMPARATOR, "§bSettings", List.of("§7Every single option, grouped by topic:", "§7Fighting, Survival, Mace and air, Movement, Team and system.", "§eClick to open")));
+            this.container.setStack(23, labelItem(Items.NAME_TAG, "§dTiers", List.of("§7Per-bot tiers (LT5 to HT1) and their settings.", "§eClick to open")));
+            this.container.setStack(25, labelItem(Items.CHEST, "§aModes", List.of("§7FFA & Loot, Tournament, Crowd & Ladder,", "§7Team Tournament, Kits and Test Mode.", "§eClick to open")));
+            this.container.setStack(49, labelItem(Items.NETHER_STAR, "§ePvpBot Hub", List.of("§7Page 1 of " + pages.size(), "§bClick to open the page list")));
+         } else if (pageName.equals(Gui.DIFF_PAGE)) {
+            Item[] levelIcons = new Item[]{Items.WOODEN_SWORD, Items.STONE_SWORD, Items.IRON_SWORD, Items.DIAMOND_SWORD, Items.NETHERITE_SWORD, Items.DRAGON_HEAD};
+            Item[] styleIcons = new Item[]{Items.TNT, Items.SHIELD, Items.BLAZE_ROD};
+            this.container.setStack(0, labelItem(Items.DRAGON_HEAD, "§6Difficulty", List.of("§7How skilled the bots are.", "§7Changes aim, reaction, crits, eating and more at once.", "§7Fine tune single options on the Settings pages.")));
+            this.container.setStack(18, labelItem(Items.BLAZE_ROD, "§6Playstyle", List.of("§7How the bots like to fight.", "§7Layered on top of the difficulty.")));
             for (int i = 0; i < PvpBotMod.LEVEL_NAMES.length; i++) {
                boolean current = PvpBotMod.LEVEL_NAMES[i].equals(PvpBotMod.difficultyName);
-               this.container
-                  .setStack(
-                     9 + i,
-                     labelItem(
-                        current ? Items.LIME_DYE : Items.RED_DYE,
-                        (current ? "§a" : "§c") + (i + 1) + ". " + PvpBotMod.LEVEL_NAMES[i],
-                        List.of(current ? "§7Current difficulty" : "§7Click to select")
-                     )
-                  );
+               ItemStack st = labelItem(
+                  levelIcons[Math.min(i, levelIcons.length - 1)],
+                  (current ? "§a> " : "§f") + (i + 1) + ". " + PvpBotMod.LEVEL_NAMES[i],
+                  List.of(current ? "§aCurrent difficulty" : "§7Click to select")
+               );
+               if (current) {
+                  st.set(DataComponentTypes.ENCHANTMENT_GLINT_OVERRIDE, true);
+               }
+
+               this.container.setStack(9 + i, st);
             }
 
             for (int i = 0; i < PvpBotMod.PLAYSTYLE_NAMES.length; i++) {
                boolean current = PvpBotMod.PLAYSTYLE_NAMES[i].equals(PvpBotMod.playstyleName);
-               this.container
-                  .setStack(
-                     27 + i,
-                     labelItem(
-                        current ? Items.LIME_DYE : Items.RED_DYE,
-                        (current ? "§a" : "§c") + PvpBotMod.PLAYSTYLE_NAMES[i],
-                        List.of(current ? "§7Current playstyle" : "§7Click to select")
-                     )
-                  );
+               ItemStack st = labelItem(
+                  styleIcons[Math.min(i, styleIcons.length - 1)],
+                  (current ? "§a> " : "§f") + PvpBotMod.PLAYSTYLE_NAMES[i],
+                  List.of(current ? "§aCurrent playstyle" : "§7Click to select")
+               );
+               if (current) {
+                  st.set(DataComponentTypes.ENCHANTMENT_GLINT_OVERRIDE, true);
+               }
+
+               this.container.setStack(27 + i, st);
             }
          } else if (pageName.equals(Gui.TEST_PAGE)) {
             for (int i = 0; i < Fighting.TEST_FEATURES.length && i < 45; i++) {
@@ -13618,7 +14142,7 @@ final class Tiers {
       double q = tier / 9.0;
       switch (kit) {
          case "sword":
-            // better aim, spacing, critting, combos
+            // better aim, spacing, critting, hit-and-back-away
             ex(m, PvpBotMod.AIM, 6, 1, q);
             ex(m, PvpBotMod.REACT_MIN, 5, 1, q);
             ex(m, PvpBotMod.REACT_MAX, 10, 3, q);
@@ -13630,14 +14154,14 @@ final class Tiers {
             ex(m, PvpBotMod.STRAFE_CHANCE, 30, 75, q);
             ex(m, PvpBotMod.CRIT_CHANCE, 15, 85, q);
             ex(m, PvpBotMod.CRIT_CHAIN_CHANCE, 10, 90, q);
-            ex(m, PvpBotMod.COMBO_CHANCE, 20, 95, q);
-            ex(m, PvpBotMod.MIX_CHANCE, 10, 70, q);
+            ex(m, PvpBotMod.BACKAWAY_CHANCE, 30, 90, q);
+            ex(m, PvpBotMod.WALLWEB_CHANCE, 10, 70, q);
             ex(m, PvpBotMod.JUMP_RESET, 5, 70, q);
             break;
          case "smp":
             // webbing, escaping, pearling, healing
             ex(m, PvpBotMod.WINDCHARGE_HEAL_CHANCE, 10, 75, q);
-            ex(m, PvpBotMod.COMBOHITS_ESCAPECHANCE, 10, 70, q);
+            ex(m, PvpBotMod.HITSESC_ESCAPECHANCE, 10, 70, q);
             ex(m, PvpBotMod.COCOON_HEARTS, 2, 5, q);
             ex(m, PvpBotMod.COCOON_CRIT_CHANCE, 10, 80, q);
             ex(m, PvpBotMod.POTION_HEARTS2, 2, 5, q);
