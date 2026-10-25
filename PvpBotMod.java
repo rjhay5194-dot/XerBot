@@ -271,6 +271,17 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt RANGED_MIN = opt("rangedmin", "ranged_min", 8.0, 4.0, 40.0, false, "blocks: ranged weapons are only used beyond this distance");
    static final PvpBotMod.Opt RANGED_MAX = opt("rangedmax", "ranged_max", 32.0, 8.0, 64.0, false, "blocks: ranged weapons are only used within this distance");
    static final PvpBotMod.Opt RANGED_COOLDOWN = opt("rangedcooldown", "ranged_cooldown", 40.0, 5.0, 400.0, false, "ticks between two ranged attacks");
+   static final PvpBotMod.Opt RESTOCK = opt(
+      "restock", "restock", 1.0, 0.0, 1.0, true, "when out or low of an important item (or armor / weapon is nearly broken) and the bot carries a shulker box with the item: run far away, place the shulker, take what it needs, break it and fight again"
+   );
+   static final PvpBotMod.Opt RESTOCK_DIST = opt("restockdist", "restock_dist", 22.0, 8.0, 60.0, false, "blocks the bot runs away from the target before it places the shulker box");
+   static final PvpBotMod.Opt RESTOCK_BELOW = opt("restockbelow", "restock_below", 2.0, 1.0, 16.0, false, "restock when the bot has fewer than this many of a food / pearl / wind charge / web / potion / totem item that the shulker holds (arrows: 4 times this)");
+   static final PvpBotMod.Opt RESTOCK_DURABILITY = opt("restockdurability", "restock_durability", 15.0, 1.0, 50.0, false, "percent durability at or under which worn armor or the weapon is swapped for a spare from the shulker");
+   static final PvpBotMod.Opt RESTOCK_COOLDOWN = opt("restockcooldown", "restock_cooldown", 600.0, 100.0, 6000.0, false, "ticks before the bot can restock again");
+   static final PvpBotMod.Opt RESTOCK_WEBS = opt("restockwebs", "restock_webs", 6.0, 0.0, 8.0, false, "webs the bot throws behind itself, spread out, while running away to restock");
+   static final PvpBotMod.Opt WEB_BLOCKS_HITS = opt(
+      "webblockshits", "web_blocks_hits", 1.0, 0.0, 1.0, true, "the bot does not swing at a target while a cobweb is on the line between them (it breaks the web first)"
+   );
    static final PvpBotMod.Opt OPENING = opt(
       "opening", "opening", 1.0, 0.0, 1.0, true, "first face-to-face: keep a distance and strafe, sometimes place webs in front, and rush in with a crit / hit web and a cart when nobody moves first"
    );
@@ -1232,6 +1243,26 @@ public class PvpBotMod implements ModInitializer {
                         .suggests(Kits.KIT_NAMES)
                         .executes(ctx -> spawn(ctx, StringArgumentType.getString(ctx, "name"), StringArgumentType.getString(ctx, "kit")))
                   )
+            )
+      );
+      root.then(
+         CommandManager.literal("restock")
+            .then(
+               CommandManager.argument("name", StringArgumentType.word())
+                  .suggests(BOT_NAMES)
+                  .executes(ctx -> {
+                     String n = StringArgumentType.getString(ctx, "name");
+                     PvpBotMod.Fight fi = FIGHTS.get(n);
+                     if (fi == null) {
+                        ((ServerCommandSource)ctx.getSource()).sendError(Text.literal(n + " is not fighting right now."));
+                        return 0;
+                     }
+
+                     fi.forceRestock = true;
+                     fi.nextRestock = 0;
+                     ((ServerCommandSource)ctx.getSource()).sendFeedback(() -> Text.literal(n + " will restock from its shulker box (it needs one in the inventory)."), false);
+                     return 1;
+                  })
             )
       );
       root.then(
@@ -2547,6 +2578,25 @@ public class PvpBotMod implements ModInitializer {
       double confidence;
       int nextPanicHop;
       int nextCartDef;
+      int nextWebBreak;
+      boolean forceRestock;
+      int nextRestock;
+      int nextRestockCheck;
+      int restockStage;
+      int restockStart;
+      int restockWebs;
+      int restockWebStage;
+      int restockWebNext;
+      int restockWebIdx;
+      int restockTries;
+      BlockPos restockCell;
+      int afterStage;
+      int afterStart;
+      double afterFromX;
+      double afterFromZ;
+      double afterX;
+      double afterZ;
+      double afterDist;
       int rushUntil;
       BlockPos tntFire;
       int cartSeenTick = -1;
@@ -2960,7 +3010,9 @@ public class PvpBotMod implements ModInitializer {
       PREDWEB,
       RANGED,
       CARTDEF,
-      OPENING;
+      OPENING,
+      RESTOCK,
+      AFTERCART;
    }
 
    static final class PlacedWeb {
@@ -3226,6 +3278,29 @@ final class BotSupport {
             }
          }
       }
+   }
+
+   /** the first cobweb block on the line from the bot's eyes to the target's body, not counting the cells the bot or the target stand in. */
+   static BlockPos webOnLine(ServerPlayerEntity bot, ServerPlayerEntity target) {
+      World w = sw(bot);
+      Vec3d from = new Vec3d(bot.getX(), bot.getEyeY(), bot.getZ());
+      Vec3d to = new Vec3d(target.getX(), target.getY() + target.getHeight() * 0.5, target.getZ());
+      int n = (int)(from.distanceTo(to) / 0.25);
+      BlockPos botCell = bot.getBlockPos();
+      BlockPos tCell = target.getBlockPos();
+      for (int i = 1; i < n; i++) {
+         Vec3d pt = from.lerp(to, (double)i / n);
+         BlockPos c = BlockPos.ofFloored(pt.x, pt.y, pt.z);
+         if (c.equals(botCell) || c.equals(botCell.up()) || c.equals(tCell) || c.equals(tCell.up())) {
+            continue;
+         }
+
+         if (w.getBlockState(c).isOf(Blocks.COBWEB)) {
+            return c;
+         }
+      }
+
+      return null;
    }
 
    /** wall web: start placing a web at the target's head, against the wall it was knocked into. */
@@ -6507,6 +6582,12 @@ final class Fighting {
                   case OPENING:
                      openingPhase(server, name, f, bot, target, dist);
                      break;
+                  case RESTOCK:
+                     restockPhase(server, name, f, bot, target, dist);
+                     break;
+                  case AFTERCART:
+                     afterCartPhase(server, name, f, bot, target, dist);
+                     break;
                   case PREDWEB:
                      predWebPhase(server, name, f, bot, target, dist);
                      break;
@@ -6524,6 +6605,22 @@ final class Fighting {
    }
 
    static boolean doAttack(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity target) {
+      if (PvpBotMod.WEB_BLOCKS_HITS.on() && f.lastBot != null) {
+         BlockPos wb = BotSupport.webOnLine(f.lastBot, target);
+         if (wb != null) {
+            // a cobweb between the bot and the target: no swing at the target, cut the web instead
+            if (PvpBotMod.globalTick >= f.nextWebBreak) {
+               f.nextWebBreak = PvpBotMod.globalTick + 8;
+               BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(wb.getX() + 0.5) + " " + BotSupport.fmt(wb.getY() + 0.5) + " " + BotSupport.fmt(wb.getZ() + 0.5));
+               BotSupport.run(server, "player " + name + " attack once");
+               BotSupport.swing(f);
+            }
+
+            f.lastHit = false;
+            return false;
+         }
+      }
+
       if (PvpBotMod.PRECISION_LOCK.on()) {
          BotSupport.run(server, BotSupport.lookCmd(name, target.getName().getString()));
       }
@@ -6704,6 +6801,7 @@ final class Fighting {
       }
 
       if (cartDefenseStep(server, name, f, bot, target, dist)
+         || restockStep(server, name, f, bot, target, dist)
          || openingStep(server, name, f, bot, target, dist)
          || windCounterStep(server, name, f, bot, target, dist, false)
          || maceFearStep(server, name, f, bot, target, dist)
@@ -7144,6 +7242,498 @@ final class Fighting {
                }
             }
          }
+      }
+   }
+
+   // ---- after an X-cart: step back a few blocks, get the next cart kit to the hotbar, reload the crossbow
+
+   static void startAfterCart(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, BlockPos rail) {
+      flog(f, "x-cart done: stepping back, then getting the next cart ready");
+      BotSupport.run(server, "player " + name + " stop");
+      f.reset();
+      f.weaponSlot = -1;
+      f.phase = PvpBotMod.Phase.AFTERCART;
+      f.afterStage = 0;
+      f.afterStart = PvpBotMod.globalTick;
+      f.afterFromX = rail.getX() + 0.5;
+      f.afterFromZ = rail.getZ() + 0.5;
+      f.afterX = bot.getX();
+      f.afterZ = bot.getZ();
+      f.afterDist = 2.0 + ThreadLocalRandom.current().nextDouble() * 2.0;
+      f.nextTntTick = PvpBotMod.globalTick + 120;
+   }
+
+   static void endAfterCart(MinecraftServer server, String name, PvpBotMod.Fight f, String why) {
+      flog(f, "after the cart: " + why);
+      BotSupport.run(server, "player " + name + " stop");
+      f.reset();
+      f.weaponSlot = -1;
+   }
+
+   static void afterCartPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int now = PvpBotMod.globalTick;
+      int elapsed = now - f.afterStart;
+      if (dist < 3.0 && f.afterStage != 3 && f.afterStage != 4) {
+         endAfterCart(server, name, f, "the target is close, back to the fight");
+         return;
+      }
+
+      switch (f.afterStage) {
+         case 0: {
+            if (elapsed == 0) {
+               BotSupport.run(server, "player " + name + " look " + String.format(Locale.ROOT, "%.1f 0", yawTo(f.afterFromX, f.afterFromZ, bot.getX(), bot.getZ())));
+               BotSupport.run(server, "player " + name + " move forward");
+               BotSupport.run(server, "player " + name + " sprint");
+            }
+
+            double mx = bot.getX() - f.afterX;
+            double mz = bot.getZ() - f.afterZ;
+            if (Math.sqrt(mx * mx + mz * mz) >= f.afterDist || elapsed >= 20) {
+               BotSupport.run(server, "player " + name + " stop");
+               f.afterStage = 1;
+               f.afterStart = now;
+            }
+
+            break;
+         }
+         case 1: {
+            int avoid = BotSupport.findWeaponSlot(bot);
+            Item[] kit = new Item[]{Items.TNT_MINECART, Items.RAIL, Items.FLINT_AND_STEEL};
+            for (Item it : kit) {
+               int idx = BotSupport.findItemIndex(bot, it);
+               if (idx >= 9) {
+                  BotSupport.toHotbar(bot, idx, avoid);
+               }
+            }
+
+            if (BotSupport.findItemIndex(bot, Items.TNT_MINECART) < 0) {
+               f.forceRestock = true;
+               flog(f, "no TNT minecart left: a restock run is next");
+            }
+
+            f.afterStage = 2;
+            f.afterStart = now;
+            break;
+         }
+         case 2: {
+            if (findChargedCrossbow(bot) >= 0 || BotSupport.findItemIndex(bot, Items.CROSSBOW) < 0 || BotSupport.findItemIndex(bot, Items.ARROW) < 0) {
+               endAfterCart(server, name, f, "kit ready");
+               break;
+            }
+
+            if (dist < 8.0) {
+               endAfterCart(server, name, f, "the target is too close to reload the crossbow");
+               break;
+            }
+
+            int slot = BotSupport.toHotbar(bot, BotSupport.findItemIndex(bot, Items.CROSSBOW), BotSupport.findWeaponSlot(bot));
+            if (slot < 0) {
+               endAfterCart(server, name, f, "no hotbar slot for the crossbow");
+               break;
+            }
+
+            BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+            BotSupport.run(server, "player " + name + " use continuous");
+            f.afterStage = 3;
+            f.afterStart = now;
+            break;
+         }
+         case 3:
+            if (elapsed >= 27) {
+               BotSupport.run(server, "player " + name + " use");
+               f.afterStage = 4;
+               f.afterStart = now;
+            }
+
+            break;
+         default:
+            if (elapsed >= 2) {
+               endAfterCart(server, name, f, "crossbow reloaded");
+            }
+
+            break;
+      }
+   }
+
+   // ---- restock: run far away, place the shulker box, take what is needed, break it, fight again
+
+   static int findShulkerIndex(ServerPlayerEntity bot) {
+      PlayerInventory inv = bot.getInventory();
+      for (int i = 0; i < 36; i++) {
+         ItemStack st = inv.getStack(i);
+         if (!st.isEmpty() && st.getItem() instanceof net.minecraft.item.BlockItem bi && bi.getBlock() instanceof net.minecraft.block.ShulkerBoxBlock) {
+            return i;
+         }
+      }
+
+      return -1;
+   }
+
+   static int restockThreshold(Item it) {
+      if (it == Items.ARROW) {
+         return Math.max(1, PvpBotMod.RESTOCK_BELOW.asInt() * 4);
+      } else if (it == Items.TNT_MINECART || it == Items.RAIL || it == Items.FLINT_AND_STEEL) {
+         return 1;
+      }
+
+      return Math.max(1, PvpBotMod.RESTOCK_BELOW.asInt());
+   }
+
+   static boolean restockItem(ItemStack st) {
+      Item it = st.getItem();
+      return st.get(DataComponentTypes.FOOD) != null
+         || it == Items.ARROW
+         || it == Items.WIND_CHARGE
+         || it == Items.ENDER_PEARL
+         || it == Items.COBWEB
+         || it == Items.TOTEM_OF_UNDYING
+         || it == Items.TNT_MINECART
+         || it == Items.RAIL
+         || it == Items.FLINT_AND_STEEL
+         || it == Items.FIREWORK_ROCKET
+         || it == Items.SPLASH_POTION
+         || it == Items.EXPERIENCE_BOTTLE;
+   }
+
+   /** should this stack from the shulker be taken? */
+   static boolean restockWants(ServerPlayerEntity bot, ItemStack st) {
+      if (st.isEmpty()) {
+         return false;
+      }
+
+      if (restockItem(st)) {
+         return BotSupport.countItem(bot, st.getItem()) < restockThreshold(st.getItem());
+      }
+
+      double pct = PvpBotMod.RESTOCK_DURABILITY.value;
+      EquipmentSlot slot = BotSupport.armorSlotFor(st);
+      if (slot != null) {
+         ItemStack worn = bot.getEquippedStack(slot);
+         return !BotSupport.lowDurabilityAt(st, pct) && (worn.isEmpty() || BotSupport.lowDurabilityAt(worn, pct));
+      }
+
+      if (st.isIn(ItemTags.SWORDS) || st.isIn(ItemTags.AXES) || st.isOf(Items.MACE)) {
+         int w = BotSupport.findWeaponSlot(bot);
+         ItemStack cur = w >= 0 ? bot.getInventory().getStack(w) : ItemStack.EMPTY;
+         return !BotSupport.lowDurabilityAt(st, pct) && (cur.isEmpty() || BotSupport.lowDurabilityAt(cur, pct));
+      }
+
+      return false;
+   }
+
+   /** null = no need, else why the bot wants to restock from this shulker. */
+   static String restockReason(ServerPlayerEntity bot, ItemStack shulker) {
+      var c = shulker.get(DataComponentTypes.CONTAINER);
+      if (c == null) {
+         return null;
+      }
+
+      for (ItemStack st : c.iterateNonEmpty()) {
+         if (restockWants(bot, st)) {
+            return restockItem(st) ? "low on " + st.getItem().getName().getString() : "worn gear, spare " + st.getItem().getName().getString() + " in the shulker";
+         }
+      }
+
+      return null;
+   }
+
+   static boolean restockStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (!PvpBotMod.RESTOCK.on() || f.phase != PvpBotMod.Phase.FIGHT || PvpBotMod.globalTick < f.nextRestock) {
+         return false;
+      }
+
+      if (!f.forceRestock && PvpBotMod.globalTick < f.nextRestockCheck) {
+         return false;
+      }
+
+      f.nextRestockCheck = PvpBotMod.globalTick + 20;
+      int si = findShulkerIndex(bot);
+      if (si < 0 || BotSupport.inCobweb(bot) || !bot.isOnGround()) {
+         return false;
+      }
+
+      String why = f.forceRestock ? "requested" : restockReason(bot, bot.getInventory().getStack(si));
+      if (why == null) {
+         return false;
+      }
+
+      f.forceRestock = false;
+      BotSupport.run(server, "player " + name + " stop");
+      BotSupport.run(server, "player " + name + " unsprint");
+      clearFightFlags(f);
+      f.phase = PvpBotMod.Phase.RESTOCK;
+      f.restockStage = 0;
+      f.restockStart = PvpBotMod.globalTick;
+      f.restockTries = 0;
+      f.restockWebStage = 0;
+      f.restockWebIdx = 0;
+      f.restockWebNext = PvpBotMod.globalTick + 4;
+      f.restockWebs = Math.min(PvpBotMod.RESTOCK_WEBS.asInt(), BotSupport.countItem(bot, Items.COBWEB));
+      flog(f, "restock: " + why + ", running away to place the shulker box");
+      return true;
+   }
+
+   static void endRestock(MinecraftServer server, String name, PvpBotMod.Fight f, String why, boolean done) {
+      flog(f, "restock end: " + why);
+      BotSupport.run(server, "player " + name + " stop");
+      f.reset();
+      f.weaponSlot = -1;
+      f.nextRestock = PvpBotMod.globalTick + (done ? PvpBotMod.RESTOCK_COOLDOWN.asInt() : 200);
+   }
+
+   /** look away from the target (turning around void edges) and run. */
+   static void restockRun(MinecraftServer server, String name, ServerPlayerEntity bot, ServerPlayerEntity target, boolean full) {
+      double dx = bot.getX() - target.getX();
+      double dz = bot.getZ() - target.getZ();
+      double baseYaw = Math.toDegrees(Math.atan2(-dx, dz));
+      double yaw = baseYaw;
+      if (PvpBotMod.VOID_AWARE.on()) {
+         double[] turns = new double[]{0.0, 50.0, -50.0, 100.0, -100.0};
+         for (double turn : turns) {
+            double a = Math.toRadians(baseYaw + turn);
+            if (!BotSupport.hazardAt(BotSupport.sw(bot), bot.getX() - Math.sin(a) * 1.6, bot.getY(), bot.getZ() + Math.cos(a) * 1.6)) {
+               yaw = baseYaw + turn;
+               break;
+            }
+         }
+      }
+
+      BotSupport.run(server, "player " + name + " look " + String.format(Locale.ROOT, "%.1f", yaw) + " 0");
+      if (full) {
+         BotSupport.run(server, "player " + name + " move forward");
+         BotSupport.run(server, "player " + name + " sprint");
+      }
+   }
+
+   /** moves the needed items from the placed shulker box into the bot's inventory. returns how many items. */
+   static int restockTake(ServerPlayerEntity bot, BlockPos cell) {
+      var be = BotSupport.sw(bot).getBlockEntity(cell);
+      if (!(be instanceof net.minecraft.block.entity.ShulkerBoxBlockEntity sbe)) {
+         return 0;
+      }
+
+      int taken = 0;
+      for (int i = 0; i < sbe.size(); i++) {
+         ItemStack st = sbe.getStack(i);
+         if (st.isEmpty() || !restockWants(bot, st)) {
+            continue;
+         }
+
+         ItemStack copy = st.copy();
+         bot.getInventory().insertStack(copy);
+         int moved = st.getCount() - copy.getCount();
+         if (moved > 0) {
+            st.decrement(moved);
+            taken += moved;
+         }
+      }
+
+      sbe.markDirty();
+      // worn out armor goes back into the inventory for a fresh piece
+      double pct = PvpBotMod.RESTOCK_DURABILITY.value;
+      for (EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}) {
+         ItemStack worn = bot.getEquippedStack(slot);
+         if (worn.isEmpty() || !BotSupport.lowDurabilityAt(worn, pct)) {
+            continue;
+         }
+
+         for (int i = 0; i < 36; i++) {
+            ItemStack inv = bot.getInventory().getStack(i);
+            if (!inv.isEmpty() && BotSupport.armorSlotFor(inv) == slot && !BotSupport.lowDurabilityAt(inv, pct)) {
+               ItemStack old = worn.copy();
+               bot.equipStack(slot, inv.copy());
+               bot.getInventory().setStack(i, old);
+               break;
+            }
+         }
+      }
+
+      return taken;
+   }
+
+   static void restockPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int now = PvpBotMod.globalTick;
+      int elapsed = now - f.restockStart;
+      net.minecraft.server.world.ServerWorld w = BotSupport.sw(bot);
+      switch (f.restockStage) {
+         case 0: {
+            if (dist >= PvpBotMod.RESTOCK_DIST.value) {
+               BotSupport.run(server, "player " + name + " stop");
+               f.restockStage = 1;
+               f.restockStart = now;
+               break;
+            }
+
+            if (elapsed > 220 || BotSupport.inCobweb(bot)) {
+               endRestock(server, name, f, "could not get away from the target", false);
+               break;
+            }
+
+            if (f.restockWebStage == 0) {
+               if (elapsed % 2 == 0) {
+                  restockRun(server, name, bot, target, elapsed < 2 || elapsed % 10 == 0);
+               }
+
+               // a trail of webs behind the bot, spread out sideways, for the chasing target
+               if (f.restockWebs > 0 && now >= f.restockWebNext && dist <= 14.0 && bot.isOnGround() && BotSupport.findItemIndex(bot, Items.COBWEB) >= 0) {
+                  double hx = target.getX() - bot.getX();
+                  double hz = target.getZ() - bot.getZ();
+                  double hl = Math.sqrt(hx * hx + hz * hz);
+                  if (hl > 0.5) {
+                     double ux = hx / hl;
+                     double uz = hz / hl;
+                     double[] offs = new double[]{0.0, 1.6, -1.6, 3.0, -3.0, 0.0, 1.6, -1.6};
+                     double off = offs[f.restockWebIdx % offs.length];
+                     BlockPos c = BlockPos.ofFloored(bot.getX() + ux * 2.2 - uz * off, bot.getY(), bot.getZ() + uz * 2.2 + ux * off);
+                     if (w.getBlockState(c).isAir() && w.getBlockState(c.down()).isFullCube(w, c.down())) {
+                        int slot = BotSupport.toHotbar(bot, BotSupport.findItemIndex(bot, Items.COBWEB), BotSupport.findWeaponSlot(bot));
+                        if (slot >= 0) {
+                           BotSupport.run(server, "player " + name + " stop");
+                           BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+                           BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(c.getX() + 0.5) + " " + BotSupport.fmt(c.getY()) + " " + BotSupport.fmt(c.getZ() + 0.5));
+                           f.restockWebStage = 1;
+                           break;
+                        }
+                     }
+
+                     f.restockWebIdx++;
+                     f.restockWebNext = now + 3;
+                  }
+               }
+            } else if (f.restockWebStage == 1) {
+               BotSupport.useOnce(server, name, f);
+               f.restockWebStage = 2;
+            } else {
+               f.restockWebs--;
+               f.restockWebIdx++;
+               f.restockWebNext = now + 8;
+               f.restockWebStage = 0;
+               restockRun(server, name, bot, target, true);
+            }
+
+            break;
+         }
+         case 1: {
+            if (dist < 7.0) {
+               endRestock(server, name, f, "the target caught up", false);
+               break;
+            }
+
+            int si = findShulkerIndex(bot);
+            if (si < 0) {
+               endRestock(server, name, f, "no shulker box in the inventory", false);
+               break;
+            }
+
+            double dx = bot.getX() - target.getX();
+            double dz = bot.getZ() - target.getZ();
+            double dl = Math.max(0.1, Math.sqrt(dx * dx + dz * dz));
+            BlockPos cell = null;
+            for (int k = 0; k < 8 && cell == null; k++) {
+               double a = Math.atan2(dz, dx) + k * Math.PI / 4.0;
+               BlockPos c = BlockPos.ofFloored(bot.getX() + Math.cos(a) * 1.6, bot.getY(), bot.getZ() + Math.sin(a) * 1.6);
+               if (w.getBlockState(c).isAir() && w.getBlockState(c.up()).isAir() && w.getBlockState(c.down()).isFullCube(w, c.down())) {
+                  cell = c;
+               }
+            }
+
+            int slot = BotSupport.toHotbar(bot, si, BotSupport.findWeaponSlot(bot));
+            if (cell == null || slot < 0) {
+               endRestock(server, name, f, "no room to place the shulker box", false);
+               break;
+            }
+
+            f.restockCell = cell;
+            BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+            BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(cell.getX() + 0.5) + " " + BotSupport.fmt(cell.getY()) + " " + BotSupport.fmt(cell.getZ() + 0.5));
+            f.restockStage = 2;
+            f.restockStart = now;
+            break;
+         }
+         case 2:
+            if (elapsed >= 1) {
+               BotSupport.useOnce(server, name, f);
+               f.restockStage = 3;
+               f.restockStart = now;
+            }
+
+            break;
+         case 3:
+            if (elapsed >= 1) {
+               if (f.restockCell != null && w.getBlockState(f.restockCell).getBlock() instanceof net.minecraft.block.ShulkerBoxBlock) {
+                  f.restockStage = 4;
+                  f.restockStart = now;
+               } else if (elapsed >= 3) {
+                  if (++f.restockTries < 2) {
+                     f.restockStage = 1;
+                     f.restockStart = now;
+                  } else {
+                     endRestock(server, name, f, "the shulker box was not placed", false);
+                  }
+               }
+            }
+
+            break;
+         case 4:
+            // a short "opening the box" pause, shorter when the target is already close
+            if (elapsed >= (dist < 10.0 ? 3 : 8)) {
+               int took = restockTake(bot, f.restockCell);
+               flog(f, "restock: took " + took + " items from the shulker box");
+               f.restockStage = 5;
+               f.restockStart = now;
+            }
+
+            break;
+         case 5: {
+            BlockPos cell = f.restockCell;
+            if (cell == null) {
+               endRestock(server, name, f, "lost the shulker position", false);
+               break;
+            }
+
+            BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(cell.getX() + 0.5) + " " + BotSupport.fmt(cell.getY() + 0.5) + " " + BotSupport.fmt(cell.getZ() + 0.5));
+            if (elapsed >= 2) {
+               w.breakBlock(cell, true, bot);
+               BotSupport.swing(f);
+               f.restockStage = 6;
+               f.restockStart = now;
+            }
+
+            break;
+         }
+         case 6: {
+            BlockPos cell = f.restockCell;
+            net.minecraft.entity.ItemEntity drop = null;
+            for (Entity e : w.getNonSpectatingEntities(Entity.class, new Box(cell).expand(4.0))) {
+               if (e instanceof net.minecraft.entity.ItemEntity ie && ie.getStack().getItem() instanceof net.minecraft.item.BlockItem bi && bi.getBlock() instanceof net.minecraft.block.ShulkerBoxBlock) {
+                  drop = ie;
+                  break;
+               }
+            }
+
+            if (drop == null) {
+               if (elapsed >= 2) {
+                  endRestock(server, name, f, findShulkerIndex(bot) >= 0 ? "restocked, shulker box picked up again" : "restocked", true);
+               }
+
+               break;
+            }
+
+            if (elapsed > 50) {
+               endRestock(server, name, f, "the shulker box could not be picked up", true);
+               break;
+            }
+
+            BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(drop.getX()) + " " + BotSupport.fmt(drop.getY()) + " " + BotSupport.fmt(drop.getZ()));
+            if (elapsed % 6 == 0) {
+               BotSupport.run(server, "player " + name + " move forward");
+            }
+
+            break;
+         }
+         default:
+            endRestock(server, name, f, "unknown stage", false);
+            break;
       }
    }
 
@@ -8585,7 +9175,12 @@ final class Fighting {
             if (elapsed >= 2) {
                Entity cart = findTntCart(bot, rail);
                if (cart == null) {
-                  endTntCart(server, name, f, "the cart exploded or is gone");
+                  if (f.tntStyle == 2) {
+                     startAfterCart(server, name, f, bot, rail);
+                  } else {
+                     endTntCart(server, name, f, "the cart exploded or is gone");
+                  }
+
                } else if (elapsed >= 30) {
                   if (f.tntShots < 2 && BotSupport.findItemIndex(bot, Items.ARROW) >= 0 && !tntBeginDraw(server, name, f, bot, cart)) {
                      endTntCart(server, name, f, "missed and cannot shoot again");
@@ -13546,7 +14141,7 @@ final class Gui {
    static final String DIFF_PAGE = "Difficulty";
    private static final String[] SETTINGS_ORDER = new String[]{
       "Combat", "Opening", "Sword Tech", "Human Mistakes", "Human", "Shield", "Eating", "Escape", "Webs", "Potions & Items",
-      "Wind & Mace", "Mace Pressure", "Ranged", "Fall & Swap", "Elytra", "Pillar & Climb", "Pathfinding", "Team & FFA", "TNT Cart", "Tiers", "Debug"
+      "Restock", "Wind & Mace", "Mace Pressure", "Ranged", "Fall & Swap", "Elytra", "Pillar & Climb", "Pathfinding", "Team & FFA", "TNT Cart", "Tiers", "Debug"
    };
    private static final String[] MODE_ORDER = new String[]{FFA_PAGE, TOUR_PAGE, ARENA_PAGE, TEAMS_PAGE, KITS_PAGE, TEST_PAGE};
 
@@ -13801,6 +14396,7 @@ final class Gui {
          "webfightback",
          "webfightbackticks",
          "hitweb",
+         "webblockshits",
          "wallwebchance",
          "wallwebdist",
          "wallwebcooldown",
@@ -13877,6 +14473,7 @@ final class Gui {
       cat("Mace Pressure", "macefinishaggro", "macefinishhearts", "macetotem", "maceretry", "maceretrymax", "macechaingap", "macepressure", "macepressurerange", "webmace", "macekeepdist", "maceaimerror", "macemistake", "windjumplatechance", "windjumplatemax", "divelead");
       cat("Opening", "opening", "openingdist", "openwait", "openwebchance", "openwebcount");
       cat("Human", "flickturns", "tracklag", "panichearts", "panichopchance", "confidence", "confidencestrength");
+      cat("Restock", "restock", "restockdist", "restockbelow", "restockdurability", "restockcooldown", "restockwebs");
       cat("Ranged", "rangedchance", "rangedmin", "rangedmax", "rangedcooldown");
       cat("Sword Tech", "jumpresetwindow", "jumpresetrange", "lowfightchance", "prep", "prepgapples", "prepdist", "prepaxe", "baitchance", "baitticks", "baitcooldown", "pearlaggro", "pearlaggromin", "pearlaggrocd", "pearlaggrohearts");
       cat("Elytra", "elytrachance", "elytramaxglides", "elytraburstchance", "elytradisengage", "elytrareach", "elytradurability", "elytraescapechance", "elytraescapedist", "elytrachasechance", "elytrachasedist", "elytrachaseclose", "elytraboosts", "elytratakeoff");
@@ -13928,7 +14525,11 @@ final class Gui {
       icon(Items.NETHER_STAR, "confidence", "confidencestrength");
       icon(Items.TNT_MINECART, "tntcartneutral", "cartdefense", "cartdefensedist", "cartbreakchance", "cartdefensedelay");
       icon(Items.COBWEB, "openwebchance", "openwebcount");
-      icon(Items.SPYGLASS, "openingdist");
+      icon(Items.SPYGLASS, "openingdist", "restockdist");
+      icon(Items.COBWEB, "restockwebs");
+      icon(Items.ANVIL, "restockdurability");
+      icon(Items.GOLDEN_APPLE, "restockbelow");
+      icon(Items.CLOCK, "restockcooldown");
       icon(Items.LEATHER_BOOTS, "dtapchance", "dtapticks");
       icon(Items.IRON_SWORD, "sweephit", "mirrorpunish");
       icon(Items.TOTEM_OF_UNDYING, "macetotem");
@@ -13940,6 +14541,7 @@ final class Gui {
       icon(
          Items.COBWEB,
          "hitweb",
+         "webblockshits",
          "wallwebchance",
          "wallwebdist",
          "wallwebcooldown",
@@ -14004,6 +14606,7 @@ final class Gui {
       catIcon("Sword Tech", Items.IRON_SWORD);
       catIcon("Elytra", Items.ELYTRA);
       catIcon("Ranged", Items.BOW);
+      catIcon("Restock", Items.SHULKER_BOX);
       catIcon("Opening", Items.CLOCK);
       catIcon("Human", Items.LEATHER_HELMET);
       catIcon("Pathfinding", Items.FILLED_MAP);
