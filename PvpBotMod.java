@@ -271,6 +271,9 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt RANGED_MIN = opt("rangedmin", "ranged_min", 8.0, 4.0, 40.0, false, "blocks: ranged weapons are only used beyond this distance");
    static final PvpBotMod.Opt RANGED_MAX = opt("rangedmax", "ranged_max", 32.0, 8.0, 64.0, false, "blocks: ranged weapons are only used within this distance");
    static final PvpBotMod.Opt RANGED_COOLDOWN = opt("rangedcooldown", "ranged_cooldown", 40.0, 5.0, 400.0, false, "ticks between two ranged attacks");
+   static final PvpBotMod.Opt XCART_PRELOAD = opt(
+      "xcartpreload", "xcart_preload", 1.0, 0.0, 1.0, true, "the bot loads its crossbow ahead of time (target far away, eating or in a web, after shooting a projectile, and right after an X-cart) so the X-cart is ready; quick charge is used"
+   );
    static final PvpBotMod.Opt RESTOCK = opt(
       "restock", "restock", 1.0, 0.0, 1.0, true, "when out or low of an important item (or armor / weapon is nearly broken) and the bot carries a shulker box with the item: run far away, place the shulker, take what it needs, break it and fight again"
    );
@@ -2582,6 +2585,11 @@ public class PvpBotMod implements ModInitializer {
       boolean forceRestock;
       int nextRestock;
       int nextRestockCheck;
+      int nextReload;
+      int reloadAfterShot;
+      int reloadStage;
+      int reloadStart;
+      int reloadPull;
       int restockStage;
       int restockStart;
       int restockWebs;
@@ -3012,7 +3020,8 @@ public class PvpBotMod implements ModInitializer {
       CARTDEF,
       OPENING,
       RESTOCK,
-      AFTERCART;
+      AFTERCART,
+      RELOAD;
    }
 
    static final class PlacedWeb {
@@ -6585,6 +6594,9 @@ final class Fighting {
                   case RESTOCK:
                      restockPhase(server, name, f, bot, target, dist);
                      break;
+                  case RELOAD:
+                     reloadPhase(server, name, f, bot, target, dist);
+                     break;
                   case AFTERCART:
                      afterCartPhase(server, name, f, bot, target, dist);
                      break;
@@ -6802,6 +6814,7 @@ final class Fighting {
 
       if (cartDefenseStep(server, name, f, bot, target, dist)
          || restockStep(server, name, f, bot, target, dist)
+         || reloadStep(server, name, f, bot, target, dist)
          || openingStep(server, name, f, bot, target, dist)
          || windCounterStep(server, name, f, bot, target, dist, false)
          || maceFearStep(server, name, f, bot, target, dist)
@@ -7316,26 +7329,18 @@ final class Fighting {
             break;
          }
          case 2: {
-            if (findChargedCrossbow(bot) >= 0 || BotSupport.findItemIndex(bot, Items.CROSSBOW) < 0 || BotSupport.findItemIndex(bot, Items.ARROW) < 0) {
+            if (findChargedCrossbow(bot) >= 0 || findUnloadedCrossbow(bot) < 0 || BotSupport.findItemIndex(bot, Items.ARROW) < 0) {
                endAfterCart(server, name, f, "kit ready");
                break;
             }
 
-            if (dist < 8.0) {
+            if (dist < 4.0) {
                endAfterCart(server, name, f, "the target is too close to reload the crossbow");
                break;
             }
 
-            int slot = BotSupport.toHotbar(bot, BotSupport.findItemIndex(bot, Items.CROSSBOW), BotSupport.findWeaponSlot(bot));
-            if (slot < 0) {
-               endAfterCart(server, name, f, "no hotbar slot for the crossbow");
-               break;
-            }
-
-            BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
-            BotSupport.run(server, "player " + name + " use continuous");
-            f.afterStage = 3;
-            f.afterStart = now;
+            endAfterCart(server, name, f, "reloading the crossbow (quick)");
+            startReload(server, name, f, bot);
             break;
          }
          case 3:
@@ -7349,6 +7354,124 @@ final class Fighting {
          default:
             if (elapsed >= 2) {
                endAfterCart(server, name, f, "crossbow reloaded");
+            }
+
+            break;
+      }
+   }
+
+   // ---- crossbow preload for the X-cart (uses quick charge)
+
+   static int findUnloadedCrossbow(ServerPlayerEntity bot) {
+      PlayerInventory inv = bot.getInventory();
+      for (int i = 0; i < 36; i++) {
+         ItemStack st = inv.getStack(i);
+         if (st.isOf(Items.CROSSBOW) && !crossbowCharged(st)) {
+            return i;
+         }
+      }
+
+      return -1;
+   }
+
+   /** ticks to load this crossbow: 25 minus 5 per quick charge level, plus one tick of margin. */
+   static int crossbowPullTicks(ItemStack st) {
+      int lvl = 0;
+      var ench = st.get(DataComponentTypes.ENCHANTMENTS);
+      if (ench != null) {
+         for (var entry : ench.getEnchantments()) {
+            if (entry.matchesKey(net.minecraft.enchantment.Enchantments.QUICK_CHARGE)) {
+               lvl = ench.getLevel(entry);
+            }
+         }
+      }
+
+      return Math.max(5, 25 - 5 * lvl) + 1;
+   }
+
+   static void startReload(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot) {
+      BotSupport.run(server, "player " + name + " stop");
+      f.reset();
+      f.weaponSlot = -1;
+      f.phase = PvpBotMod.Phase.RELOAD;
+      f.reloadStage = 0;
+      f.reloadStart = PvpBotMod.globalTick;
+   }
+
+   static void endReload(MinecraftServer server, String name, PvpBotMod.Fight f, String why, int cooldown) {
+      flog(f, "crossbow reload: " + why);
+      BotSupport.run(server, "player " + name + " stop");
+      f.reset();
+      f.weaponSlot = -1;
+      f.nextReload = PvpBotMod.globalTick + cooldown;
+   }
+
+   static boolean reloadStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (!PvpBotMod.XCART_PRELOAD.on() || !PvpBotMod.TNT_CART.on() || f.phase != PvpBotMod.Phase.FIGHT || PvpBotMod.globalTick < f.nextReload) {
+         return false;
+      }
+
+      if (PvpBotMod.globalTick % 5 != 0 || dist < 4.0 || BotSupport.inCobweb(bot) || !bot.isOnGround()) {
+         return false;
+      }
+
+      if (findChargedCrossbow(bot) >= 0 || findUnloadedCrossbow(bot) < 0 || BotSupport.findItemIndex(bot, Items.ARROW) < 0) {
+         return false;
+      }
+
+      // only worth it when the rest of the X-cart kit is there
+      if (BotSupport.findItemIndex(bot, Items.RAIL) < 0 || BotSupport.findItemIndex(bot, Items.TNT_MINECART) < 0 || BotSupport.findItemIndex(bot, Items.FLINT_AND_STEEL) < 0) {
+         return false;
+      }
+
+      boolean eating = target.isUsingItem() && target.getActiveItem().get(DataComponentTypes.FOOD) != null;
+      boolean webbed = BotSupport.inCobweb(target);
+      boolean afterShot = PvpBotMod.globalTick < f.reloadAfterShot && dist >= 5.0;
+      if (!(dist >= 10.0 || eating || webbed || afterShot)) {
+         return false;
+      }
+
+      flog(f, "crossbow reload: " + (webbed ? "the target is in a web" : eating ? "the target is eating" : afterShot ? "after a shot, before closing in" : "the target is far"));
+      startReload(server, name, f, bot);
+      return true;
+   }
+
+   static void reloadPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int now = PvpBotMod.globalTick;
+      int elapsed = now - f.reloadStart;
+      if (dist < 2.5) {
+         endReload(server, name, f, "the target is too close", 100);
+         return;
+      }
+
+      switch (f.reloadStage) {
+         case 0: {
+            int idx = findUnloadedCrossbow(bot);
+            int slot = idx < 0 ? -1 : BotSupport.toHotbar(bot, idx, BotSupport.findWeaponSlot(bot));
+            if (slot < 0) {
+               endReload(server, name, f, "no crossbow to load", 200);
+               break;
+            }
+
+            f.reloadPull = crossbowPullTicks(bot.getInventory().getStack(slot));
+            BotSupport.run(server, "player " + name + " stop");
+            BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+            BotSupport.run(server, "player " + name + " use continuous");
+            f.reloadStage = 1;
+            f.reloadStart = now;
+            break;
+         }
+         case 1:
+            if (elapsed >= f.reloadPull) {
+               BotSupport.run(server, "player " + name + " use");
+               f.reloadStage = 2;
+               f.reloadStart = now;
+            }
+
+            break;
+         default:
+            if (elapsed >= 2) {
+               endReload(server, name, f, findChargedCrossbow(bot) >= 0 ? "loaded" : "did not load", findChargedCrossbow(bot) >= 0 ? 20 : 120);
             }
 
             break;
@@ -8296,6 +8419,7 @@ final class Fighting {
       f.reset();
       f.rangedNext = PvpBotMod.globalTick + PvpBotMod.RANGED_COOLDOWN.asInt();
       f.weaponSlot = -1;
+      f.reloadAfterShot = PvpBotMod.globalTick + 100;
    }
 
    /** look at the target's chest with a lead for its movement and a drop for the projectile's fall. */
@@ -10016,6 +10140,11 @@ final class Fighting {
 
          net.minecraft.block.Block b = ((net.minecraft.item.BlockItem)st.getItem()).getBlock();
          if (b instanceof net.minecraft.block.FallingBlock || b == Blocks.TNT || b == Blocks.COBWEB) {
+            continue;
+         }
+
+         // never use kit storage as a building block: shulker boxes, chests, barrels, anything with a block entity
+         if (b instanceof net.minecraft.block.ShulkerBoxBlock || b instanceof net.minecraft.block.BlockWithEntity || b instanceof net.minecraft.block.AbstractChestBlock) {
             continue;
          }
 
@@ -14482,7 +14611,7 @@ final class Gui {
       cat("Pillar & Climb", "pillar", "pillarmax", "pillarmaxheight", "pillarcooldown", "climbcombo");
       cat("Debug", "fightlog");
       cat("Tiers", "nametagtiers");
-      cat("TNT Cart", "tntcart", "tntcartchance", "tntcartneutral", "cartdefense", "cartdefensedist", "cartbreakchance", "cartdefensedelay", "cartmode", "cartfinishhp", "cartminhp", "cartpunish", "tntcartsafedist", "tntcartdrawticks", "tntcartcooldown");
+      cat("TNT Cart", "tntcart", "tntcartchance", "tntcartneutral", "cartdefense", "cartdefensedist", "cartbreakchance", "cartdefensedelay", "cartmode", "cartfinishhp", "cartminhp", "cartpunish", "tntcartsafedist", "tntcartdrawticks", "tntcartcooldown", "xcartpreload");
       cat("Fall & Swap", "fallmace", "fallmacechance", "fallmaceheight", "fallclutch", "clutchheight", "clutchsuccess", "maceswap", "maceswapchance", "spearswap", "spearswapchance", "spearreach");
       icon(
          Items.DIAMOND_SWORD,
@@ -14523,6 +14652,7 @@ final class Gui {
       icon(Items.ENDER_EYE, "turnspeed", "flickturns", "tracklag");
       icon(Items.GOLDEN_APPLE, "panichearts", "panichopchance");
       icon(Items.NETHER_STAR, "confidence", "confidencestrength");
+      icon(Items.CROSSBOW, "xcartpreload");
       icon(Items.TNT_MINECART, "tntcartneutral", "cartdefense", "cartdefensedist", "cartbreakchance", "cartdefensedelay");
       icon(Items.COBWEB, "openwebchance", "openwebcount");
       icon(Items.SPYGLASS, "openingdist", "restockdist");
