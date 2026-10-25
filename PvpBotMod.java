@@ -293,6 +293,9 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt OPENWEB_CHANCE = opt("openwebchance", "opening_web_chance", 40.0, 0.0, 100.0, false, "percent chance to place webs in front of the bot during the opening");
    static final PvpBotMod.Opt OPENWEB_COUNT = opt("openwebcount", "opening_web_count", 4.0, 2.0, 4.0, false, "most webs placed in the opening (2 up to this many)");
    static final PvpBotMod.Opt FLICK_TURNS = opt("flickturns", "flick_turns", 1.0, 0.0, 1.0, true, "big turns start fast and slow down, like a mouse flick");
+   static final PvpBotMod.Opt SURPRISE_CHANCE = opt("surprisechance", "surprise_chance", 80.0, 0.0, 100.0, false, "percent chance the bot is caught off guard when the target suddenly strafes off its aim, and is late to aim back at it");
+   static final PvpBotMod.Opt SURPRISE_MIN = opt("surprisedelaymin", "surprise_delay_min", 4.0, 0.0, 30.0, false, "shortest ticks the bot stays slow to aim after being surprised");
+   static final PvpBotMod.Opt SURPRISE_MAX = opt("surprisedelaymax", "surprise_delay_max", 10.0, 0.0, 40.0, false, "longest ticks the bot stays slow to aim after being surprised");
    static final PvpBotMod.Opt TRACK_LAG = opt("tracklag", "track_lag", 40.0, 0.0, 100.0, false, "how far the aim trails behind a fast moving target (0 = perfect tracking)");
    static final PvpBotMod.Opt PANIC_HEARTS = opt("panichearts", "panic_hearts", 3.0, 0.5, 10.0, false, "hearts at or under which the bot panics (random jumps and strafes)");
    static final PvpBotMod.Opt PANIC_HOP = opt("panichopchance", "panic_hop_chance", 30.0, 0.0, 100.0, false, "percent chance per half second to hop while panicking");
@@ -401,7 +404,14 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt CART_BREAK_CHANCE = opt(
       "cartbreakchance", "cart_break_chance", 50.0, 0.0, 100.0, false, "percent chance to break the enemy cart instead of blocking it with blocks, when the cart is in reach"
    );
-   static final PvpBotMod.Opt CART_DEFENSE_DELAY = opt("cartdefensedelay", "cart_defense_delay", 2.0, 0.0, 10.0, false, "ticks between seeing the cart and reacting to it");
+   static final PvpBotMod.Opt CART_DEFENSE_DELAY = opt("cartdefensedelay", "cart_defense_delay", 6.0, 0.0, 40.0, false, "shortest reaction delay in ticks between seeing the cart and reacting to it (a random value up to cartdefensedelaymax)");
+   static final PvpBotMod.Opt CART_DEFENSE_DELAY_MAX = opt("cartdefensedelaymax", "cart_defense_delay_max", 14.0, 0.0, 60.0, false, "longest reaction delay in ticks before the bot reacts to a cart");
+   static final PvpBotMod.Opt CART_DEFENSE_MISS = opt("cartdefensemiss", "cart_defense_miss", 5.0, 0.0, 100.0, false, "percent chance the bot does not notice the enemy cart at all");
+   static final PvpBotMod.Opt XCART_CHANCE = opt("xcartchance", "xcart_chance", 70.0, 0.0, 100.0, false, "when the bot can do both a bow cart and an X-cart, the percent chance it picks the X-cart");
+   static final PvpBotMod.Opt PEARL_CART_CHANCE = opt("pearlcartchance", "pearl_cart_chance", 45.0, 0.0, 100.0, false, "chance the bot ender pearls to the target and goes straight into an X-cart when its X-cart kit is ready (from 8 blocks away)");
+   static final PvpBotMod.Opt WALL_DEF = opt("walldef", "wall_defense", 1.0, 0.0, 1.0, true, "when the target is 4 to 8 blocks away holding a TNT minecart / crossbow, or has placed a cart, the bot builds a 3x2 wall in front of itself to block the blast (logs are crafted into planks)");
+   static final PvpBotMod.Opt WALL_DEF_CHANCE = opt("walldefchance", "wall_defense_chance", 75.0, 0.0, 100.0, false, "percent chance the bot builds the wall when the target looks like it is going to cart");
+
    static final PvpBotMod.Opt CART_FINISH_HP = opt(
       "cartfinishhp", "cart_finish_hp", 8.0, 2.0, 20.0, false, "target health (half hearts) at or under which the cart finisher is very likely (vexbot doctrine)"
    );
@@ -2586,6 +2596,18 @@ public class PvpBotMod implements ModInitializer {
       int nextRestock;
       int nextRestockCheck;
       int nextReload;
+      double lastAimDiff;
+      int surpriseUntil;
+      int surpriseCatchUntil;
+      int surpriseCool;
+      int cartDelayRoll;
+      int pearlCartUntil;
+      boolean pearlCartPending;
+      int nextWallDef;
+      int wallStage;
+      int wallStart;
+      int wallIdx;
+      java.util.List<BlockPos> wallCells = new java.util.ArrayList<>();
       int reloadAfterShot;
       int reloadStage;
       int reloadStart;
@@ -3021,7 +3043,8 @@ public class PvpBotMod implements ModInitializer {
       OPENING,
       RESTOCK,
       AFTERCART,
-      RELOAD;
+      RELOAD,
+      WALLDEF;
    }
 
    static final class PlacedWeb {
@@ -4351,6 +4374,37 @@ final class BotSupport {
       double lead = PvpBotMod.PREDICT_TICKS.value;
       boolean leading = lead > 0.0 && PvpBotMod.AIM.asInt() <= 2;
       boolean spread = PvpBotMod.AIM_SPREAD.value > 0.0 && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.AIM_SPREAD.value;
+      // caught off guard: the target was on the crosshair and suddenly strafes off it
+      int nowT = PvpBotMod.globalTick;
+      double sdx = target.getX() - bot.getX();
+      double sdz = target.getZ() - bot.getZ();
+      double shl = Math.sqrt(sdx * sdx + sdz * sdz);
+      double sdiff = shl < 0.5 ? 0.0 : wrapDegrees(Math.toDegrees(Math.atan2(-sdx, sdz)) - bot.getYaw());
+      if (PvpBotMod.SURPRISE_CHANCE.value > 0.0 && shl >= 1.0 && nowT >= f.surpriseUntil && nowT >= f.surpriseCool
+         && Math.abs(f.lastAimDiff) < 6.0 && Math.abs(sdiff) >= 14.0) {
+         f.surpriseCool = nowT + 50;
+         if (ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.SURPRISE_CHANCE.value) {
+            int mn = PvpBotMod.SURPRISE_MIN.asInt();
+            int mx = Math.max(mn, PvpBotMod.SURPRISE_MAX.asInt());
+            f.surpriseUntil = nowT + mn + ThreadLocalRandom.current().nextInt(mx - mn + 1);
+            f.surpriseCatchUntil = f.surpriseUntil + 4;
+         }
+      }
+
+      f.lastAimDiff = sdiff;
+      if (nowT < f.surpriseUntil) {
+         // did not expect it: the aim stays where it was
+         return "player " + name + " look " + String.format(Locale.ROOT, "%.1f %.1f", bot.getYaw(), bot.getPitch());
+      }
+
+      if (nowT < f.surpriseCatchUntil && Math.abs(sdiff) > 3.0) {
+         // then it turns back in a few quick steps instead of locking on at once
+         double ny = bot.getYaw() + Math.max(-22.0, Math.min(22.0, sdiff));
+         double sdy = target.getEyeY() - bot.getEyeY();
+         double sp = -Math.toDegrees(Math.atan2(sdy, Math.max(0.1, shl)));
+         return "player " + name + " look " + String.format(Locale.ROOT, "%.1f %.1f", ny, sp);
+      }
+
       String turning = limitedTurn(name, bot, target);
       if (turning != null) {
          return turning;
@@ -6594,6 +6648,9 @@ final class Fighting {
                   case RESTOCK:
                      restockPhase(server, name, f, bot, target, dist);
                      break;
+                  case WALLDEF:
+                     wallPhase(server, name, f, bot, target, dist);
+                     break;
                   case RELOAD:
                      reloadPhase(server, name, f, bot, target, dist);
                      break;
@@ -6813,6 +6870,7 @@ final class Fighting {
       }
 
       if (cartDefenseStep(server, name, f, bot, target, dist)
+         || wallDefStep(server, name, f, bot, target, dist)
          || restockStep(server, name, f, bot, target, dist)
          || reloadStep(server, name, f, bot, target, dist)
          || openingStep(server, name, f, bot, target, dist)
@@ -7356,6 +7414,198 @@ final class Fighting {
                endAfterCart(server, name, f, "crossbow reloaded");
             }
 
+            break;
+      }
+   }
+
+   static boolean canXEarly(String xMissing) {
+      return xMissing == null;
+   }
+
+   // ---- wall defense: a 3x2 wall of planks in front of the bot against the target's X-cart
+
+   static int findPlanksIndex(ServerPlayerEntity bot) {
+      PlayerInventory inv = bot.getInventory();
+      for (int i = 0; i < 36; i++) {
+         ItemStack st = inv.getStack(i);
+         if (!st.isEmpty() && st.isIn(ItemTags.PLANKS)) {
+            return i;
+         }
+      }
+
+      return -1;
+   }
+
+   static int findLogIndex(ServerPlayerEntity bot) {
+      PlayerInventory inv = bot.getInventory();
+      for (int i = 0; i < 36; i++) {
+         ItemStack st = inv.getStack(i);
+         if (!st.isEmpty() && st.isIn(ItemTags.LOGS) && planksFor(st.getItem()) != null) {
+            return i;
+         }
+      }
+
+      return -1;
+   }
+
+   static Item planksFor(Item log) {
+      String path = Registries.ITEM.getId(log).getPath();
+      path = path.replace("stripped_", "").replace("_log", "").replace("_wood", "").replace("_stem", "").replace("_hyphae", "");
+      if (path.equals("bamboo_block")) {
+         path = "bamboo";
+      }
+
+      Identifier id = Identifier.of("minecraft", path + "_planks");
+      return Registries.ITEM.containsId(id) ? Registries.ITEM.get(id) : null;
+   }
+
+   /** crafts logs into planks in the inventory (1 log = 4 planks) until there are at least 12 planks. */
+   static void craftPlanks(ServerPlayerEntity bot) {
+      for (int guard = 0; guard < 6; guard++) {
+         int have = 0;
+         PlayerInventory inv = bot.getInventory();
+         for (int i = 0; i < 36; i++) {
+            ItemStack st = inv.getStack(i);
+            if (!st.isEmpty() && st.isIn(ItemTags.PLANKS)) {
+               have += st.getCount();
+            }
+         }
+
+         int li = findLogIndex(bot);
+         if (have >= 12 || li < 0) {
+            return;
+         }
+
+         ItemStack log = inv.getStack(li);
+         Item planks = planksFor(log.getItem());
+         log.decrement(1);
+         inv.insertStack(new ItemStack(planks, 4));
+      }
+   }
+
+   static int wallBlockIndex(ServerPlayerEntity bot) {
+      int pl = findPlanksIndex(bot);
+      return pl >= 0 ? pl : findPillarBlock(bot);
+   }
+
+   static boolean wallDefStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (!PvpBotMod.WALL_DEF.on() || f.phase != PvpBotMod.Phase.FIGHT || PvpBotMod.globalTick < f.nextWallDef || PvpBotMod.globalTick % 5 != 0) {
+         return false;
+      }
+
+      if (dist < 4.0 || dist > 8.0 || !bot.isOnGround() || BotSupport.inCobweb(bot)) {
+         return false;
+      }
+
+      ItemStack mh = target.getMainHandStack();
+      ItemStack oh = target.getOffHandStack();
+      boolean holding = mh.isOf(Items.TNT_MINECART) || oh.isOf(Items.TNT_MINECART) || crossbowCharged(mh) || crossbowCharged(oh);
+      boolean cartOut = findEnemyCart(bot, f) != null;
+      if (!holding && !cartOut) {
+         return false;
+      }
+
+      if (wallBlockIndex(bot) < 0 && findLogIndex(bot) < 0) {
+         return false;
+      }
+
+      f.nextWallDef = PvpBotMod.globalTick + 60;
+      if (!cartOut && !chance(PvpBotMod.WALL_DEF_CHANCE.value)) {
+         return false;
+      }
+
+      BotSupport.run(server, "player " + name + " stop");
+      BotSupport.run(server, "player " + name + " unsprint");
+      clearFightFlags(f);
+      f.phase = PvpBotMod.Phase.WALLDEF;
+      f.wallStage = 0;
+      f.wallStart = PvpBotMod.globalTick;
+      f.wallIdx = 0;
+      f.wallCells.clear();
+      flog(f, "wall defense: " + (cartOut ? "the target placed a cart" : "the target holds a cart / loaded crossbow") + ", building a wall");
+      return true;
+   }
+
+   static void endWall(MinecraftServer server, String name, PvpBotMod.Fight f, String why, int cooldown) {
+      flog(f, "wall defense end: " + why);
+      BotSupport.run(server, "player " + name + " stop");
+      f.reset();
+      f.weaponSlot = -1;
+      f.nextWallDef = PvpBotMod.globalTick + cooldown;
+   }
+
+   static void wallPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int now = PvpBotMod.globalTick;
+      net.minecraft.server.world.ServerWorld w = BotSupport.sw(bot);
+      if (dist < 3.0) {
+         endWall(server, name, f, "the target is too close", 100);
+         return;
+      }
+
+      if (now - f.wallStart > 80) {
+         endWall(server, name, f, "timeout", 100);
+         return;
+      }
+
+      switch (f.wallStage) {
+         case 0: {
+            craftPlanks(bot);
+            int bi = wallBlockIndex(bot);
+            int slot = bi < 0 ? -1 : BotSupport.toHotbar(bot, bi, BotSupport.findWeaponSlot(bot));
+            if (slot < 0) {
+               endWall(server, name, f, "no blocks to build with", 200);
+               break;
+            }
+
+            double dx = target.getX() - bot.getX();
+            double dz = target.getZ() - bot.getZ();
+            double dl = Math.max(0.1, Math.sqrt(dx * dx + dz * dz));
+            double ux = dx / dl;
+            double uz = dz / dl;
+            double px = -uz;
+            double pz = ux;
+            int by = bot.getBlockY();
+            f.wallCells.clear();
+            for (int h = 0; h < 2; h++) {
+               for (int k : new int[]{0, -1, 1}) {
+                  BlockPos c = BlockPos.ofFloored(bot.getX() + ux * 2.0 + px * k, by + h, bot.getZ() + uz * 2.0 + pz * k);
+                  if (!f.wallCells.contains(c)) {
+                     f.wallCells.add(c);
+                  }
+               }
+            }
+
+            BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+            f.wallIdx = 0;
+            f.wallStage = 1;
+            break;
+         }
+         case 1: {
+            while (f.wallIdx < f.wallCells.size()) {
+               BlockPos c = f.wallCells.get(f.wallIdx);
+               BlockPos below = c.down();
+               boolean canHold = w.getBlockState(below).isFullCube(w, below) || f.wallCells.contains(below) && !w.getBlockState(below).isAir();
+               if (w.getBlockState(c).isAir() && canHold) {
+                  break;
+               }
+
+               f.wallIdx++;
+            }
+
+            if (f.wallIdx >= f.wallCells.size()) {
+               endWall(server, name, f, "wall built", 200);
+               break;
+            }
+
+            BlockPos c = f.wallCells.get(f.wallIdx);
+            BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(c.getX() + 0.5) + " " + BotSupport.fmt(c.getY()) + " " + BotSupport.fmt(c.getZ() + 0.5));
+            f.wallStage = 2;
+            break;
+         }
+         default:
+            BotSupport.useOnce(server, name, f);
+            f.wallIdx++;
+            f.wallStage = 1;
             break;
       }
    }
@@ -7922,10 +8172,17 @@ final class Fighting {
 
       if (f.cartSeenTick < 0) {
          f.cartSeenTick = PvpBotMod.globalTick;
+         int mn = PvpBotMod.CART_DEFENSE_DELAY.asInt();
+         int mx = Math.max(mn, PvpBotMod.CART_DEFENSE_DELAY_MAX.asInt());
+         f.cartDelayRoll = mn + ThreadLocalRandom.current().nextInt(mx - mn + 1);
+         if (chance(PvpBotMod.CART_DEFENSE_MISS.value)) {
+            f.cartDelayRoll = 100000;
+            flog(f, "enemy tnt cart: not noticed");
+         }
       }
 
-      // the reaction delay: a few ticks between seeing the cart and doing something about it
-      if (PvpBotMod.globalTick - f.cartSeenTick < PvpBotMod.CART_DEFENSE_DELAY.asInt()) {
+      // a human-like reaction delay, random between the min and max
+      if (PvpBotMod.globalTick - f.cartSeenTick < f.cartDelayRoll) {
          return false;
       }
 
@@ -8906,7 +9163,8 @@ final class Fighting {
       boolean eating = target.isUsingItem() && !target.isBlocking() && target.getActiveItem().get(DataComponentTypes.FOOD) != null;
       boolean bowing = target.isUsingItem() && target.getActiveItem().isOf(Items.BOW);
       boolean punish = PvpBotMod.CART_PUNISH.on() && (webbed || eating || bowing || target.getItemCooldownManager().isCoolingDown(Items.ENDER_PEARL.getDefaultStack()));
-      double pct = f.rushUntil > PvpBotMod.globalTick ? 100.0 : finish ? 60.0 : punish ? PvpBotMod.TNT_CART_CHANCE.value : PvpBotMod.TNT_CART_NEUTRAL.value;
+      boolean pearlCart = PvpBotMod.globalTick < f.pearlCartUntil && canXEarly(xMissing);
+      double pct = pearlCart || f.rushUntil > PvpBotMod.globalTick ? 100.0 : finish ? 60.0 : punish ? PvpBotMod.TNT_CART_CHANCE.value : PvpBotMod.TNT_CART_NEUTRAL.value;
       if (!chance(pct) || minDist > 5.0) {
          return false;
       }
@@ -8922,11 +9180,22 @@ final class Fighting {
       } else if (mode == 1) {
          style = canBow ? 0 : 2;
       } else if (canBow && (finish || webbed || eating || bowing) && selfHp >= 14.0) {
-         style = canX && chance(30.0) ? 2 : 1;
+         style = canX && chance(PvpBotMod.XCART_CHANCE.value * 0.6) ? 2 : 1;
       } else if (canBow && canX) {
-         style = chance(35.0) ? 2 : 0;
+         style = chance(PvpBotMod.XCART_CHANCE.value) ? 2 : 0;
       } else {
          style = canBow ? 0 : 2;
+      }
+
+      if (pearlCart && canX) {
+         style = 2;
+      }
+
+      // never roll a style the bot cannot do: no bow = no bow cart / insta cart, no loaded crossbow = no X-cart
+      if (style == 2 && !canX) {
+         style = canBow ? 0 : -1;
+      } else if ((style == 0 || style == 1) && !canBow) {
+         style = canX ? 2 : -1;
       }
 
       if ((style == 1 || style == 2) && selfHp < 12.0) {
@@ -10938,12 +11207,13 @@ final class Fighting {
 
    /** Pearl aggression: far from a visible target, pearl straight onto it to close the gap. */
    static boolean pearlAggroStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
-      if (PvpBotMod.PEARL_AGGRO_CHANCE.value <= 0.0
+      boolean cartPearl = PvpBotMod.PEARL_CART_CHANCE.value > 0.0 && PvpBotMod.TNT_CART.on() && xcartKitMissing(bot) == null;
+      if ((PvpBotMod.PEARL_AGGRO_CHANCE.value <= 0.0 && !cartPearl)
          || PvpBotMod.globalTick < f.nextPearlAggroTick
          || PvpBotMod.globalTick % 10 != 0
          || f.phase != PvpBotMod.Phase.FIGHT
          || !bot.isOnGround()
-         || dist < PvpBotMod.PEARL_AGGRO_MIN.value
+         || dist < (cartPearl ? Math.min(8.0, PvpBotMod.PEARL_AGGRO_MIN.value) : PvpBotMod.PEARL_AGGRO_MIN.value)
          || dist > 45.0
          || bot.getHealth() + bot.getAbsorptionAmount() < PvpBotMod.PEARL_AGGRO_HEARTS.value * 2.0
          || BotSupport.inCobweb(bot)
@@ -10953,10 +11223,13 @@ final class Fighting {
       }
 
       f.nextPearlAggroTick = PvpBotMod.globalTick + 20;
-      if (!chance(PvpBotMod.PEARL_AGGRO_CHANCE.value)) {
+      boolean farEnough = dist >= PvpBotMod.PEARL_AGGRO_MIN.value;
+      double pearlPct = cartPearl ? Math.max(PvpBotMod.PEARL_CART_CHANCE.value, farEnough ? PvpBotMod.PEARL_AGGRO_CHANCE.value : 0.0) : PvpBotMod.PEARL_AGGRO_CHANCE.value;
+      if (!chance(pearlPct)) {
          return false;
       }
 
+      f.pearlCartPending = cartPearl;
       double pitch = pearlPitch(bot, target);
       int idx = BotSupport.findItemIndex(bot, Items.ENDER_PEARL);
       int slot = idx < 0 ? -1 : BotSupport.toHotbar(bot, idx, BotSupport.findWeaponSlot(bot));
@@ -11003,8 +11276,15 @@ final class Fighting {
          boolean teleported = f.pagFrom != null && bot.getEntityPos().distanceTo(f.pagFrom) > 3.0;
          if (teleported || elapsed > 50) {
             BotSupport.run(server, "player " + name + " stop");
+            boolean toCart = teleported && f.pearlCartPending;
+            f.pearlCartPending = false;
             f.reset();
             f.reactAt = PvpBotMod.globalTick;
+            if (toCart) {
+               f.nextTntTick = PvpBotMod.globalTick;
+               f.pearlCartUntil = PvpBotMod.globalTick + 60;
+               flog(f, "pearled to the target: going straight into an X-cart");
+            }
          }
       }
    }
@@ -14601,7 +14881,7 @@ final class Gui {
       cat("Wind & Mace", "windclimb", "windclimbheight", "windmacechance", "windmacehearts", "windmacecooldown", "finishmacechance", "adapthits", "adaptmacechance", "adaptmacemin", "adaptmacemax", "windjumpdelay", "windjumpchance", "macetrade", "maceoutnumbered", "maceoutnumberedcount", "maceoutnumberedboost", "healabort", "windcounter", "windcounterchance", "windcounterrange", "windcountercooldown", "macefear", "macefearrun", "macefearradius", "macefeardist");
       cat("Mace Pressure", "macefinishaggro", "macefinishhearts", "macetotem", "maceretry", "maceretrymax", "macechaingap", "macepressure", "macepressurerange", "webmace", "macekeepdist", "maceaimerror", "macemistake", "windjumplatechance", "windjumplatemax", "divelead");
       cat("Opening", "opening", "openingdist", "openwait", "openwebchance", "openwebcount");
-      cat("Human", "flickturns", "tracklag", "panichearts", "panichopchance", "confidence", "confidencestrength");
+      cat("Human", "flickturns", "tracklag", "surprisechance", "surprisedelaymin", "surprisedelaymax", "panichearts", "panichopchance", "confidence", "confidencestrength");
       cat("Restock", "restock", "restockdist", "restockbelow", "restockdurability", "restockcooldown", "restockwebs");
       cat("Ranged", "rangedchance", "rangedmin", "rangedmax", "rangedcooldown");
       cat("Sword Tech", "jumpresetwindow", "jumpresetrange", "lowfightchance", "prep", "prepgapples", "prepdist", "prepaxe", "baitchance", "baitticks", "baitcooldown", "pearlaggro", "pearlaggromin", "pearlaggrocd", "pearlaggrohearts");
@@ -14611,7 +14891,7 @@ final class Gui {
       cat("Pillar & Climb", "pillar", "pillarmax", "pillarmaxheight", "pillarcooldown", "climbcombo");
       cat("Debug", "fightlog");
       cat("Tiers", "nametagtiers");
-      cat("TNT Cart", "tntcart", "tntcartchance", "tntcartneutral", "cartdefense", "cartdefensedist", "cartbreakchance", "cartdefensedelay", "cartmode", "cartfinishhp", "cartminhp", "cartpunish", "tntcartsafedist", "tntcartdrawticks", "tntcartcooldown", "xcartpreload");
+      cat("TNT Cart", "tntcart", "tntcartchance", "tntcartneutral", "cartdefense", "cartdefensedist", "cartbreakchance", "cartdefensedelay", "cartmode", "cartfinishhp", "cartminhp", "cartpunish", "tntcartsafedist", "tntcartdrawticks", "tntcartcooldown", "xcartpreload", "xcartchance", "pearlcartchance", "cartdefensedelaymax", "cartdefensemiss", "walldef", "walldefchance");
       cat("Fall & Swap", "fallmace", "fallmacechance", "fallmaceheight", "fallclutch", "clutchheight", "clutchsuccess", "maceswap", "maceswapchance", "spearswap", "spearswapchance", "spearreach");
       icon(
          Items.DIAMOND_SWORD,
@@ -14649,11 +14929,13 @@ final class Gui {
       );
       icon(Items.GOLDEN_SWORD, "backawaychance", "backawayticks", "alwayscrit", "alwayscritdist", "alwayscritspeed");
       icon(Items.COBWEB, "wallwebchance", "wallwebdist", "wallwebcooldown");
-      icon(Items.ENDER_EYE, "turnspeed", "flickturns", "tracklag");
+      icon(Items.ENDER_EYE, "turnspeed", "flickturns", "tracklag", "surprisechance", "surprisedelaymin", "surprisedelaymax");
       icon(Items.GOLDEN_APPLE, "panichearts", "panichopchance");
       icon(Items.NETHER_STAR, "confidence", "confidencestrength");
-      icon(Items.CROSSBOW, "xcartpreload");
-      icon(Items.TNT_MINECART, "tntcartneutral", "cartdefense", "cartdefensedist", "cartbreakchance", "cartdefensedelay");
+      icon(Items.CROSSBOW, "xcartpreload", "xcartchance");
+      icon(Items.ENDER_PEARL, "pearlcartchance");
+      icon(Items.OAK_PLANKS, "walldef", "walldefchance");
+      icon(Items.TNT_MINECART, "tntcartneutral", "cartdefense", "cartdefensedist", "cartbreakchance", "cartdefensedelay", "cartdefensedelaymax", "cartdefensemiss");
       icon(Items.COBWEB, "openwebchance", "openwebcount");
       icon(Items.SPYGLASS, "openingdist", "restockdist");
       icon(Items.COBWEB, "restockwebs");
