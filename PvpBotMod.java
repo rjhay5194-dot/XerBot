@@ -246,6 +246,7 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt ALWAYS_CRIT = opt(
       "alwayscrit", "always_crit", 1.0, 0.0, 1.0, true, "always go for a crit when the target is very close, eating or barely moving"
    );
+   static final PvpBotMod.Opt ALWAYSCRIT_CHANCE = opt("alwayscritchance", "always_crit_chance", 50.0, 0.0, 100.0, false, "percent of the hits in the always-crit situations (very close, eating, barely moving) that are crit attempts; the rest are normal hit, back away, hit");
    static final PvpBotMod.Opt ALWAYSCRIT_DIST = opt(
       "alwayscritdist", "always_crit_dist", 1.3, 0.5, 3.0, false, "blocks: closer than this, every hit is a crit attempt"
    );
@@ -383,7 +384,7 @@ public class PvpBotMod implements ModInitializer {
       "tntcartchance", "tnt_cart_chance", 30.0, 0.0, 100.0, false, "percent chance each second to start the TNT minecart trick while the target is webbed, eating, drawing a bow or just pearled, when the target is within about 4.5 blocks"
    );
    static final PvpBotMod.Opt TNT_CART_NEUTRAL = opt(
-      "tntcartneutral", "tnt_cart_neutral", 6.0, 0.0, 100.0, false, "percent chance each second to start the TNT minecart trick in a normal fight (target close, nothing special going on)"
+      "tntcartneutral", "tnt_cart_neutral", 12.0, 0.0, 100.0, false, "percent chance each second to start the TNT minecart trick in a normal fight (target close, nothing special going on)"
    );
    static final PvpBotMod.Opt TNT_SAFE_DIST = opt(
       "tntcartsafedist", "tnt_cart_safe_dist", 8.0, 5.0, 20.0, false, "the bot only shoots the TNT minecart from at least this many blocks away"
@@ -392,7 +393,7 @@ public class PvpBotMod implements ModInitializer {
       "tntcartdrawticks", "tnt_cart_draw_ticks", 5.0, 3.0, 20.0, false, "ticks the bow is drawn (low charge = slow arc); raised automatically when the cart is out of range"
    );
    static final PvpBotMod.Opt TNT_COOLDOWN = opt(
-      "tntcartcooldown", "tnt_cart_cooldown", 600.0, 100.0, 6000.0, false, "ticks before the bot tries the TNT minecart trick again"
+      "tntcartcooldown", "tnt_cart_cooldown", 200.0, 20.0, 6000.0, false, "ticks before the bot tries the TNT minecart trick again"
    );
    static final PvpBotMod.Opt CART_MODE = opt(
       "cartmode", "cart_mode", 0.0, 0.0, 3.0, false, "cart style: 0 = smart (picks by situation and kit), 1 = normal (rail + cart, back off, then shoot a Flame bow), 2 = insta cart (shoot the Flame bow first, rail + cart placed 2 ticks after so the arrow lands on the new cart), 3 = xcart (loaded crossbow shot through a flint-and-steel fire onto the cart)"
@@ -2502,6 +2503,7 @@ public class PvpBotMod implements ModInitializer {
       Vec3d lavaAim;
       final List<BlockPos> lavaPre = new ArrayList<>();
       int critChainUntil;
+      boolean alwaysCritRoll = true;
       int hitsStreak;
       int hitsThreshold = -1;
       int webtrapStage;
@@ -2596,6 +2598,8 @@ public class PvpBotMod implements ModInitializer {
       int nextRestock;
       int nextRestockCheck;
       int nextReload;
+      int xBackTicks;
+      int xBackUntil;
       double lastAimDiff;
       int surpriseUntil;
       int surpriseCatchUntil;
@@ -7259,7 +7263,7 @@ final class Fighting {
                            f.sprintHoldUntil = PvpBotMod.globalTick + 3;
                         } else {
                            boolean guaranteedWebCrit = PvpBotMod.WEB_CRIT.on() && BotSupport.inCobweb(target);
-                           boolean sureCrit = !f.wallArmed && alwaysCritNow(bot, target, dist);
+                           boolean sureCrit = !f.wallArmed && f.alwaysCritRoll && alwaysCritNow(bot, target, dist);
                            boolean critPossible = (PvpBotMod.CRIT_CHANCE.value > 0.0 || sureCrit) && dist <= Math.max(PvpBotMod.CRIT_RANGE.value, 2.0);
                            if (ready && (reach <= PvpBotMod.ATTACK_RANGE.value || critPossible || guaranteedWebCrit || f.punishCrit)) {
                               if (f.reactAt < 0) {
@@ -7270,6 +7274,7 @@ final class Fighting {
 
                               if (PvpBotMod.globalTick >= f.reactAt) {
                                  f.reactAt = -1;
+                                 f.alwaysCritRoll = ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.ALWAYSCRIT_CHANCE.value;
                                  boolean chaining = f.critChainUntil > PvpBotMod.globalTick;
                                  boolean tryCrit;
                                  if (f.punishCrit) {
@@ -9164,7 +9169,8 @@ final class Fighting {
       boolean bowing = target.isUsingItem() && target.getActiveItem().isOf(Items.BOW);
       boolean punish = PvpBotMod.CART_PUNISH.on() && (webbed || eating || bowing || target.getItemCooldownManager().isCoolingDown(Items.ENDER_PEARL.getDefaultStack()));
       boolean pearlCart = PvpBotMod.globalTick < f.pearlCartUntil && canXEarly(xMissing);
-      double pct = pearlCart || f.rushUntil > PvpBotMod.globalTick ? 100.0 : finish ? 60.0 : punish ? PvpBotMod.TNT_CART_CHANCE.value : PvpBotMod.TNT_CART_NEUTRAL.value;
+      boolean webPush = webbed && xMissing == null;
+      double pct = pearlCart || f.rushUntil > PvpBotMod.globalTick ? 100.0 : webPush ? 75.0 : finish ? 60.0 : punish ? PvpBotMod.TNT_CART_CHANCE.value : PvpBotMod.TNT_CART_NEUTRAL.value;
       if (!chance(pct) || minDist > 5.0) {
          return false;
       }
@@ -9191,6 +9197,12 @@ final class Fighting {
          style = 2;
       }
 
+      // the target is stuck in a web: crossbow X-cart only, with a longer back away before the shot
+      boolean webX = webbed && canX && chance(80.0);
+      if (webX) {
+         style = 2;
+      }
+
       // never roll a style the bot cannot do: no bow = no bow cart / insta cart, no loaded crossbow = no X-cart
       if (style == 2 && !canX) {
          style = canBow ? 0 : -1;
@@ -9206,6 +9218,7 @@ final class Fighting {
          return false;
       }
 
+      f.xBackTicks = webX && style == 2 ? 10 : 0;
       String err = startTntCart(server, name, f, bot, target, style);
       if (err != null) {
          cartLog(f, err);
@@ -9385,7 +9398,7 @@ final class Fighting {
       BotSupport.run(server, "player " + name + " stop");
       f.reset();
       f.weaponSlot = -1;
-      f.nextTntTick = PvpBotMod.globalTick + Math.max(100, PvpBotMod.TNT_COOLDOWN.asInt());
+      f.nextTntTick = PvpBotMod.globalTick + Math.max(20, PvpBotMod.TNT_COOLDOWN.asInt());
    }
 
    /** switches to the Flame bow, aims and starts drawing. false when there is no bow slot or no shot is possible. */
@@ -9760,11 +9773,49 @@ final class Fighting {
 
                BotSupport.run(server, "player " + name + " hotbar " + (xs + 1));
                BotSupport.run(server, "player " + name + " look " + String.format(Locale.ROOT, "%.2f %.2f", yawTo(bot.getX(), bot.getZ(), at.x, at.z), pitch));
+               // press S for 5 to 10 ticks (10 on a webbed target) before the crossbow shot, unless there is a drop behind
+               int back = f.xBackTicks > 0 ? f.xBackTicks : 5 + ThreadLocalRandom.current().nextInt(6);
+               f.xBackTicks = 0;
+               double bux = hd < 0.1 ? 0.0 : (at.x - bot.getX()) / hd;
+               double buz = hd < 0.1 ? 0.0 : (at.z - bot.getZ()) / hd;
+               if (!BotSupport.hazardAt(w, bot.getX() - bux * 2.0, bot.getY(), bot.getZ() - buz * 2.0)) {
+                  BotSupport.run(server, "player " + name + " move backward");
+                  f.xBackUntil = now + back;
+                  f.tntStage = 27;
+                  flog(f, "x-cart: backing away for " + back + " ticks before the crossbow shot");
+               } else {
+                  f.tntStage = 26;
+               }
+
+               f.tntStart = now;
+            }
+
+            break;
+         case 27: {
+            Entity cart = findTntCart(bot, rail);
+            if (cart == null) {
+               endTntCart(server, name, f, "the minecart is gone while backing away");
+               break;
+            }
+
+            Vec3d at = new Vec3d(cart.getX(), cart.getY() + 0.35, cart.getZ());
+            double hd = Math.sqrt((at.x - bot.getX()) * (at.x - bot.getX()) + (at.z - bot.getZ()) * (at.z - bot.getZ()));
+            double pitch = tntArrowPitch(3.15, hd, at.y - (bot.getEyeY() - 0.1));
+            if (Double.isNaN(pitch)) {
+               BotSupport.run(server, "player " + name + " move");
+               endTntCart(server, name, f, "the crossbow arc does not reach the cart after backing away");
+               break;
+            }
+
+            BotSupport.run(server, "player " + name + " look " + String.format(Locale.ROOT, "%.2f %.2f", yawTo(bot.getX(), bot.getZ(), at.x, at.z), pitch));
+            if (now >= f.xBackUntil || hd >= 14.0) {
+               BotSupport.run(server, "player " + name + " move");
                f.tntStage = 26;
                f.tntStart = now;
             }
 
             break;
+         }
          case 26:
             if (elapsed >= 1) {
                BotSupport.useOnce(server, name, f);
@@ -14759,6 +14810,7 @@ final class Gui {
          "mirrorpunish",
          "alwayscrit",
          "alwayscritdist",
+         "alwayscritchance",
          "alwayscritspeed",
          "turnspeed"
       );
@@ -14927,7 +14979,7 @@ final class Gui {
          "stunslam",
          "maceaware"
       );
-      icon(Items.GOLDEN_SWORD, "backawaychance", "backawayticks", "alwayscrit", "alwayscritdist", "alwayscritspeed");
+      icon(Items.GOLDEN_SWORD, "backawaychance", "backawayticks", "alwayscrit", "alwayscritdist", "alwayscritspeed", "alwayscritchance");
       icon(Items.COBWEB, "wallwebchance", "wallwebdist", "wallwebcooldown");
       icon(Items.ENDER_EYE, "turnspeed", "flickturns", "tracklag", "surprisechance", "surprisedelaymin", "surprisedelaymax");
       icon(Items.GOLDEN_APPLE, "panichearts", "panichopchance");
