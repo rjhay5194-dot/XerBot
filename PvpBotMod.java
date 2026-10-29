@@ -173,7 +173,7 @@ public class PvpBotMod implements ModInitializer {
       "flee", "flee_distance", 8.0, 3.0, 30.0, false, "blocks to put between the bot and the target before it starts eating"
    );
    static final PvpBotMod.Opt CRIT_CHANCE = opt("critchance", "crit_chance", 25.0, 0.0, 100.0, false, "percent chance to go for a jump-crit when it can");
-   static final PvpBotMod.Opt CRIT_RANGE = opt("critrange", "crit_range", 4.0, 1.0, 6.0, false, "blocks within which a crit can be attempted");
+   static final PvpBotMod.Opt CRIT_RANGE = opt("critrange", "crit_range", 1.0, 0.5, 6.0, false, "blocks within which a crit can be attempted");
    static final PvpBotMod.Opt FALL_CRIT = opt("fallcrit", "fall_crit", 1.0, 0.0, 1.0, true, "always crit while already falling and in range");
    static final PvpBotMod.Opt CRIT_CHAIN_CHANCE = opt(
       "critchainchance", "crit_chain_chance", 40.0, 0.0, 100.0, false, "percent chance a crit against a vulnerable target starts a guaranteed-crit burst"
@@ -184,6 +184,11 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt FIND_RANGE = opt(
       "findrange", "find_range", 24.0, 4.0, 128.0, false, "blocks within which auto-target and focus fire look for a target"
    );
+   static final PvpBotMod.Opt AIM_VARY = opt("aimvary", "aim_vary", 1.0, 0.0, 1.0, true, "bot aim speed re-rolls between aimvarymin and aimvarymax ticks (overrides 'aim' while on)");
+   static final PvpBotMod.Opt AIM_VARY_MIN = opt("aimvarymin", "aim_vary_min", 0.0, 0.0, 8.0, false, "fastest aim ticks it can roll (0 = instant)");
+   static final PvpBotMod.Opt AIM_VARY_MAX = opt("aimvarymax", "aim_vary_max", 8.0, 0.0, 8.0, false, "slowest aim ticks it can roll");
+   static final PvpBotMod.Opt AIM_VARY_CHANCE = opt("aimvarychance", "aim_vary_chance", 30.0, 0.0, 100.0, false, "percent chance each interval that the aim speed changes");
+   static final PvpBotMod.Opt AIM_VARY_SECONDS = opt("aimvaryseconds", "aim_vary_seconds", 6.0, 1.0, 60.0, false, "seconds between aim-change rolls");
    static final PvpBotMod.Opt AIM = opt("aim", "aim_ticks", 3.0, 0.0, 20.0, false, "HeroBot look-delta ticks (lower = snappier aim)");
    static final PvpBotMod.Opt REACT_MIN = opt("reactmin", "reaction_min_ticks", 3.0, 0.0, 40.0, false, "shortest reaction delay before a swing, in ticks");
    static final PvpBotMod.Opt REACT_MAX = opt("reactmax", "reaction_max_ticks", 7.0, 0.0, 40.0, false, "longest reaction delay before a swing, in ticks");
@@ -248,7 +253,7 @@ public class PvpBotMod implements ModInitializer {
    );
    static final PvpBotMod.Opt ALWAYSCRIT_CHANCE = opt("alwayscritchance", "always_crit_chance", 50.0, 0.0, 100.0, false, "percent of the hits in the always-crit situations (very close, eating, barely moving) that are crit attempts; the rest are normal hit, back away, hit");
    static final PvpBotMod.Opt ALWAYSCRIT_DIST = opt(
-      "alwayscritdist", "always_crit_dist", 1.3, 0.5, 3.0, false, "blocks: closer than this, every hit is a crit attempt"
+      "alwayscritdist", "always_crit_dist", 1.0, 0.5, 3.0, false, "blocks: closer than this, every hit is a crit attempt"
    );
    static final PvpBotMod.Opt ALWAYSCRIT_SPEED = opt(
       "alwayscritspeed", "always_crit_speed", 0.04, 0.0, 0.3, false, "target speed (blocks per tick) below which it counts as barely moving"
@@ -2736,6 +2741,8 @@ public class PvpBotMod implements ModInitializer {
       double pillarHp;
       int pathFails;
       int lastHurtTick = -1000;
+      int aimVal = -1;
+      long aimNextRoll;
       int testMode;
       int testExpire;
       int testUntil;
@@ -3563,8 +3570,26 @@ final class BotSupport {
       run(server, "player " + name + " sprint");
    }
 
+   static int aimTicks(PvpBotMod.Fight f) {
+      if (f == null || !PvpBotMod.AIM_VARY.on()) {
+         return PvpBotMod.AIM.asInt();
+      }
+
+      int lo = PvpBotMod.AIM_VARY_MIN.asInt();
+      int hi = Math.max(lo, PvpBotMod.AIM_VARY_MAX.asInt());
+      long now = System.currentTimeMillis();
+      if (f.aimVal < 0 || now >= f.aimNextRoll) {
+         f.aimNextRoll = now + (long)(PvpBotMod.AIM_VARY_SECONDS.value * 1000.0);
+         if (f.aimVal < 0 || ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.AIM_VARY_CHANCE.value) {
+            f.aimVal = lo + ThreadLocalRandom.current().nextInt(hi - lo + 1);
+         }
+      }
+
+      return Math.max(lo, Math.min(hi, f.aimVal));
+   }
+
    static String lookCmd(String name, String target) {
-      int t = PvpBotMod.AIM.asInt();
+      int t = aimTicks(PvpBotMod.FIGHTS.get(name));
       return "player " + name + " look upon " + target + " eyes" + (t > 0 ? " delta " + t : "");
    }
 
@@ -4376,7 +4401,8 @@ final class BotSupport {
    static String aimCmd(String name, ServerPlayerEntity bot, ServerPlayerEntity target, PvpBotMod.Fight f) {
       double w = PvpBotMod.WOBBLE.value;
       double lead = PvpBotMod.PREDICT_TICKS.value;
-      boolean leading = lead > 0.0 && PvpBotMod.AIM.asInt() <= 2;
+      int aimT = aimTicks(f);
+      boolean leading = lead > 0.0 && aimT <= 2;
       boolean spread = PvpBotMod.AIM_SPREAD.value > 0.0 && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.AIM_SPREAD.value;
       // caught off guard: the target was on the crosshair and suddenly strafes off it
       int nowT = PvpBotMod.globalTick;
@@ -4467,6 +4493,19 @@ final class BotSupport {
             double diff = wrapDegrees(yaw - bot.getYaw());
             yaw += Math.copySign(PvpBotMod.OVERSHOOT_DEGREES.value, diff == 0.0 ? 1.0 : diff);
             f.overshotLast = true;
+         }
+
+         if (aimT > 0 && PvpBotMod.AIM_VARY.on()) {
+            double k = 1.0 / (aimT + 1.0);
+            double dy = (yaw - bot.getYaw()) % 360.0;
+            if (dy > 180.0) {
+               dy -= 360.0;
+            } else if (dy < -180.0) {
+               dy += 360.0;
+            }
+
+            yaw = bot.getYaw() + dy * k;
+            pitch = bot.getPitch() + (pitch - bot.getPitch()) * k;
          }
 
          return "player " + name + " look " + String.format(Locale.ROOT, "%.1f %.1f", yaw, pitch);
@@ -7264,7 +7303,7 @@ final class Fighting {
                         } else {
                            boolean guaranteedWebCrit = PvpBotMod.WEB_CRIT.on() && BotSupport.inCobweb(target);
                            boolean sureCrit = !f.wallArmed && f.alwaysCritRoll && alwaysCritNow(bot, target, dist);
-                           boolean critPossible = (PvpBotMod.CRIT_CHANCE.value > 0.0 || sureCrit) && dist <= Math.max(PvpBotMod.CRIT_RANGE.value, 2.0);
+                           boolean critPossible = (PvpBotMod.CRIT_CHANCE.value > 0.0 || sureCrit) && dist <= PvpBotMod.CRIT_RANGE.value;
                            if (ready && (reach <= PvpBotMod.ATTACK_RANGE.value || critPossible || guaranteedWebCrit || f.punishCrit)) {
                               if (f.reactAt < 0) {
                                  int lo = Math.min(PvpBotMod.REACT_MIN.asInt(), PvpBotMod.REACT_MAX.asInt());
@@ -8763,9 +8802,7 @@ final class Fighting {
          return false;
       }
 
-      Vec3d v = target.getVelocity();
-      boolean still = Math.sqrt(v.x * v.x + v.z * v.z) <= PvpBotMod.ALWAYSCRIT_SPEED.value;
-      return dist <= PvpBotMod.ALWAYSCRIT_DIST.value || target.isUsingItem() || still;
+      return dist <= PvpBotMod.ALWAYSCRIT_DIST.value;
    }
 
    /** a wall behind the target (seen from the bot) within the wall web distance. */
@@ -14933,7 +14970,7 @@ final class Gui {
       cat("Wind & Mace", "windclimb", "windclimbheight", "windmacechance", "windmacehearts", "windmacecooldown", "finishmacechance", "adapthits", "adaptmacechance", "adaptmacemin", "adaptmacemax", "windjumpdelay", "windjumpchance", "macetrade", "maceoutnumbered", "maceoutnumberedcount", "maceoutnumberedboost", "healabort", "windcounter", "windcounterchance", "windcounterrange", "windcountercooldown", "macefear", "macefearrun", "macefearradius", "macefeardist");
       cat("Mace Pressure", "macefinishaggro", "macefinishhearts", "macetotem", "maceretry", "maceretrymax", "macechaingap", "macepressure", "macepressurerange", "webmace", "macekeepdist", "maceaimerror", "macemistake", "windjumplatechance", "windjumplatemax", "divelead");
       cat("Opening", "opening", "openingdist", "openwait", "openwebchance", "openwebcount");
-      cat("Human", "flickturns", "tracklag", "surprisechance", "surprisedelaymin", "surprisedelaymax", "panichearts", "panichopchance", "confidence", "confidencestrength");
+      cat("Human", "flickturns", "tracklag", "surprisechance", "surprisedelaymin", "surprisedelaymax", "panichearts", "panichopchance", "confidence", "confidencestrength", "aimvary", "aimvarymin", "aimvarymax", "aimvarychance", "aimvaryseconds");
       cat("Restock", "restock", "restockdist", "restockbelow", "restockdurability", "restockcooldown", "restockwebs");
       cat("Ranged", "rangedchance", "rangedmin", "rangedmax", "rangedcooldown");
       cat("Sword Tech", "jumpresetwindow", "jumpresetrange", "lowfightchance", "prep", "prepgapples", "prepdist", "prepaxe", "baitchance", "baitticks", "baitcooldown", "pearlaggro", "pearlaggromin", "pearlaggrocd", "pearlaggrohearts");
