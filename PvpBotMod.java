@@ -128,7 +128,7 @@ public class PvpBotMod implements ModInitializer {
          // logging is best effort
       }
    }
-   static final PvpBotMod.Opt ATTACK_RANGE = opt("range", "attack_range", 3.0, 1.0, 6.0, false, "blocks: melee reach");
+   static final PvpBotMod.Opt ATTACK_RANGE = opt("range", "attack_range", 3.0, 1.0, 3.0, false, "blocks: melee reach (capped at 3.0, the vanilla player reach)");
    static final PvpBotMod.Opt BUNNY_HOP = opt("bunnyhop", "bunny_hop", 1.0, 0.0, 1.0, true, "bunny hop while closing a gap");
    static final PvpBotMod.Opt HOP_STOP = opt("hopstop", "hop_stop_distance", 3.5, 1.0, 8.0, false, "stop hopping within this many blocks of the target");
    static final PvpBotMod.Opt REVENGE = opt("revenge", "revenge", 1.0, 0.0, 1.0, true, "whoever hits a bot becomes its target");
@@ -184,6 +184,17 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt FIND_RANGE = opt(
       "findrange", "find_range", 24.0, 4.0, 128.0, false, "blocks within which auto-target and focus fire look for a target"
    );
+   static final PvpBotMod.Opt CRIT_CIRCLE = opt("critcircle", "crit_circle", 1.0, 0.0, 1.0, true, "target in a cobweb or eating/drinking: the bot circles it up close and crit-jumps every swing");
+   static final PvpBotMod.Opt REACH_TRIM = opt("reachtrim", "reach_trim", 0.1, 0.0, 1.0, false, "blocks shaved off the melee reach so bots never out-reach a normal player");
+   static final PvpBotMod.Opt MIRROR_HEAL = opt("mirrorheal", "mirror_heal", 1.0, 0.0, 1.0, true, "when the target is eating or healing the bot eats too (until the target fights again or the bot is healthy)");
+   static final PvpBotMod.Opt MIRROR_FIGHT_DIST = opt("mirrorfightdist", "mirror_fight_dist", 5.0, 2.0, 10.0, false, "blocks: a target that stopped healing and is this close counts as fighting again");
+   static final PvpBotMod.Opt HEAL_PRESSURE = opt("healpressure", "heal_pressure", 1.0, 0.0, 1.0, true, "target keeps hitting the bot while it tries to heal: roll web-and-retreat or one gapple plus knockback");
+   static final PvpBotMod.Opt HEAL_PRESSURE_WEB = opt("healpressureweb", "heal_pressure_web_chance", 50.0, 0.0, 100.0, false, "percent chance the roll is webs on the target + retreat (otherwise: 1 gapple, knock back, heal)");
+   static final PvpBotMod.Opt HEAL_PRESSURE_BACK = opt("healpressureback", "heal_pressure_back_distance", 5.0, 3.0, 10.0, false, "blocks the bot retreats after webbing the target, before it heals");
+   static final PvpBotMod.Opt FRONT_WEB = opt("frontweb", "front_web", 1.0, 0.0, 1.0, true, "target closing in from far: place 2-4 cobwebs in front of the bot in case it jumps on it");
+   static final PvpBotMod.Opt FRONT_WEB_CHANCE = opt("frontwebchance", "front_web_chance", 90.0, 0.0, 100.0, false, "percent chance to place the front webs when a target closes in");
+   static final PvpBotMod.Opt FRONT_WEB_DIST = opt("frontwebdist", "front_web_dist", 7.0, 4.0, 12.0, false, "blocks: distance at which a closing target triggers the front webs");
+   static final PvpBotMod.Opt FRONT_WEB_COOLDOWN = opt("frontwebcooldown", "front_web_cooldown", 6.0, 1.0, 60.0, false, "seconds before the front webs can be rolled again");
    static final PvpBotMod.Opt AIM_VARY = opt("aimvary", "aim_vary", 1.0, 0.0, 1.0, true, "bot aim speed re-rolls between aimvarymin and aimvarymax ticks (overrides 'aim' while on)");
    static final PvpBotMod.Opt AIM_VARY_MIN = opt("aimvarymin", "aim_vary_min", 0.0, 0.0, 8.0, false, "fastest aim ticks it can roll (0 = instant)");
    static final PvpBotMod.Opt AIM_VARY_MAX = opt("aimvarymax", "aim_vary_max", 8.0, 0.0, 8.0, false, "slowest aim ticks it can roll");
@@ -2743,6 +2754,34 @@ public class PvpBotMod implements ModInitializer {
       int lastHurtTick = -1000;
       int aimVal = -1;
       long aimNextRoll;
+      final java.util.List<BlockPos> wsCells = new java.util.ArrayList<>();
+      int wsIdx;
+      int wsStage;
+      int wsStart;
+      int wsNext;
+      int wsAfter;
+      int nextFrontWebTick;
+      int wsSampleTick;
+      double wsSampleDist = 999.0;
+      boolean wsClosing;
+      boolean pressureRolled;
+      boolean pressureGapple;
+      double pressureFleeDist;
+      double pressLastHp = -1.0;
+      int pressHurtTick = -1000;
+      boolean mirrorEat;
+      int mirrorFight;
+      int circleDir;
+
+      void clearHealFlags() {
+         this.pressureRolled = false;
+         this.pressureGapple = false;
+         this.pressureFleeDist = 0.0;
+         this.pressLastHp = -1.0;
+         this.pressHurtTick = -1000;
+         this.mirrorEat = false;
+         this.mirrorFight = 0;
+      }
       int testMode;
       int testExpire;
       int testUntil;
@@ -2788,6 +2827,7 @@ public class PvpBotMod implements ModInitializer {
          this.eaten = 0;
          this.reactAt = -1;
          this.strafeDir = 0;
+         this.circleDir = 0;
          this.webStage = 0;
          this.axeMode = false;
          this.targetBlocking = false;
@@ -2812,6 +2852,10 @@ public class PvpBotMod implements ModInitializer {
          this.cocoonRetries = 0;
          this.inCocoon = false;
          this.webWasEating = false;
+         this.clearHealFlags();
+         this.wsStage = 0;
+         this.wsIdx = 0;
+         this.wsCells.clear();
          this.critChainUntil = 0;
          this.hitsStreak = 0;
          this.hitsThreshold = -1;
@@ -3055,6 +3099,7 @@ public class PvpBotMod implements ModInitializer {
       RESTOCK,
       AFTERCART,
       RELOAD,
+      WEBSEQ,
       WALLDEF;
    }
 
@@ -3645,6 +3690,11 @@ final class BotSupport {
       return true;
    }
 
+   /** melee reach the bots really use: never above the vanilla 3.0 and a little under it, like an imperfect player. */
+   static double meleeReach() {
+      return Math.max(1.0, Math.min(PvpBotMod.ATTACK_RANGE.value, 3.0) - PvpBotMod.REACH_TRIM.value);
+   }
+
    static double reachDistance(ServerPlayerEntity bot, ServerPlayerEntity target) {
       Box box = target.getBoundingBox();
       double ex = bot.getX();
@@ -4175,7 +4225,7 @@ final class BotSupport {
                // While the target is close the bot fights back from inside the web (shield up, hits on cooldown)
                // and only goes back to breaking the web when the target is away.
                double reach = reachDistance(bot, target);
-               boolean threat = reach <= PvpBotMod.ATTACK_RANGE.value + 2.5;
+               boolean threat = reach <= BotSupport.meleeReach() + 2.5;
                if (threat) {
                   if (!f.webFighting) {
                      run(server, "player " + name + " stop");
@@ -4189,7 +4239,7 @@ final class BotSupport {
                   }
 
                   run(server, lookCmd(name, target.getName().getString()));
-                  if (bot.getAttackCooldownProgress(0.5F) >= 1.0F && rayReach(bot, target, PvpBotMod.ATTACK_RANGE.value)) {
+                  if (bot.getAttackCooldownProgress(0.5F) >= 1.0F && rayReach(bot, target, BotSupport.meleeReach())) {
                      Fighting.doAttack(server, name, f, target);
                   }
                } else if (f.webFighting) {
@@ -4497,14 +4547,14 @@ final class BotSupport {
 
          if (aimT > 0 && PvpBotMod.AIM_VARY.on()) {
             double k = 1.0 / (aimT + 1.0);
-            double dy = (yaw - bot.getYaw()) % 360.0;
-            if (dy > 180.0) {
-               dy -= 360.0;
-            } else if (dy < -180.0) {
-               dy += 360.0;
+            double dyaw = (yaw - bot.getYaw()) % 360.0;
+            if (dyaw > 180.0) {
+               dyaw -= 360.0;
+            } else if (dyaw < -180.0) {
+               dyaw += 360.0;
             }
 
-            yaw = bot.getYaw() + dy * k;
+            yaw = bot.getYaw() + dyaw * k;
             pitch = bot.getPitch() + (pitch - bot.getPitch()) * k;
          }
 
@@ -6703,6 +6753,9 @@ final class Fighting {
                   case PREDWEB:
                      predWebPhase(server, name, f, bot, target, dist);
                      break;
+                  case WEBSEQ:
+                     webSeqPhase(server, name, f, bot, target, dist);
+                     break;
                   default:
                      break;
                }
@@ -6742,7 +6795,7 @@ final class Fighting {
          BotSupport.swing(f);
       } else {
          ServerPlayerEntity self = f.lastBot;
-         if (self != null && BotSupport.rayReach(self, target, PvpBotMod.ATTACK_RANGE.value) && self.canSee(target)) {
+         if (self != null && BotSupport.rayReach(self, target, BotSupport.meleeReach()) && BotSupport.reachDistance(self, target) <= BotSupport.meleeReach() && self.canSee(target)) {
             boolean swapped = attributeSwap(server, name, f, self);
             if (PvpBotMod.SWEEP_HIT.on() && self.isSprinting() && self.getMainHandStack().isIn(ItemTags.SWORDS) && otherEnemyNear(self, target)) {
                BotSupport.run(server, "player " + name + " unsprint");
@@ -6930,6 +6983,7 @@ final class Fighting {
          || pearlAggroStep(server, name, f, bot, target, dist)
          || baitStep(server, name, f, bot, target, dist)
          || predWebStep(server, name, f, bot, target, dist)
+         || frontWebStep(server, name, f, bot, target, dist)
          || mendStep(server, name, f, bot, target, dist)) {
          return;
       }
@@ -6974,6 +7028,8 @@ final class Fighting {
                } else if (!predWebGap(server, name, f, bot, target, dist) && !startEatKnockback(server, name, f, bot, target, dist) && !startBlockRun(server, name, f, bot, target) && !startElyEscape(server, name, f, bot, target) && !startItemEscape(server, name, f, bot, target)) {
                   startFlee(server, name, f, 0);
                }
+            } else if (mirrorHealStep(server, name, f, bot, target, dist, hpNow)) {
+               return;
             } else if (!BotSupport.lavaStep(server, name, f, bot, target) && !BotSupport.webPlaceStep(server, name, f, bot, target)) {
                if (!BotSupport.breakoutStep(server, name, f, bot, target)) {
                   if (pathStep(server, name, f, bot, target, dist)) {
@@ -6983,6 +7039,11 @@ final class Fighting {
                   maybeAim(server, name, f, bot, target);
                   wallWebArm(bot, target, f, dist);
                   boolean vulnerable = BotSupport.targetVulnerable(bot, target);
+                  boolean circleOn = PvpBotMod.CRIT_CIRCLE.on() && (BotSupport.inCobweb(target) || BotSupport.targetHealing(target));
+                  if (circleOn) {
+                     vulnerable = true;
+                  }
+
                   boolean archer = PvpBotMod.ARCHER_RUSH.on()
                      && (target.getMainHandStack().isOf(Items.BOW) || target.getMainHandStack().isOf(Items.CROSSBOW));
                   if (vulnerable && PvpBotMod.FALL_CRIT.on() && bot.isOnGround() && !f.hopping && !f.crit && dist <= PvpBotMod.JUMP_RANGE.value) {
@@ -7153,7 +7214,20 @@ final class Fighting {
                            BotSupport.run(server, "player " + name + " sprint");
                         }
 
-                        if (PvpBotMod.STRAFE.on() && !f.hopping && !f.crit && dist <= 6.0 && !targetMaceThreat(bot, target)) {
+                        boolean circling = circleOn && !f.hopping && !f.edgeHold && dist <= 5.0 && !targetMaceThreat(bot, target);
+                        if (circling) {
+                           // crit-circle: keep one strafe direction (a circle, not a zig-zag) while staying close
+                           if (f.circleDir == 0 || bot.horizontalCollision) {
+                              f.circleDir = f.circleDir == 0 ? (ThreadLocalRandom.current().nextBoolean() ? 1 : -1) : -f.circleDir;
+                           }
+
+                           if (PvpBotMod.globalTick >= f.nextStrafeTick || f.strafeDir != f.circleDir) {
+                              f.strafeDir = f.circleDir;
+                              BotSupport.run(server, "player " + name + " move " + (f.circleDir > 0 ? "left" : "right"));
+                              axisCmd(server, name, f);
+                              f.nextStrafeTick = PvpBotMod.globalTick + 6;
+                           }
+                        } else if (PvpBotMod.STRAFE.on() && !f.hopping && !f.crit && dist <= 6.0 && !targetMaceThreat(bot, target)) {
                            if (PvpBotMod.globalTick >= f.nextStrafeTick) {
                               if (ThreadLocalRandom.current().nextDouble() * 100.0 < (archer ? 100.0 : PvpBotMod.STRAFE_CHANCE.value)) {
                                  f.strafeDir = f.strafeDir == 0 ? (ThreadLocalRandom.current().nextBoolean() ? 1 : -1) : -f.strafeDir;
@@ -7168,6 +7242,10 @@ final class Fighting {
                            }
                         } else if (f.strafeDir != 0 && PvpBotMod.globalTick >= f.sidestepUntil) {
                            stopStrafe(server, name, f);
+                        }
+
+                        if (!circling) {
+                           f.circleDir = 0;
                         }
 
                         if (PvpBotMod.STUCK.on() && PvpBotMod.globalTick % 20 == 0) {
@@ -7274,7 +7352,7 @@ final class Fighting {
                         }
 
                         if (f.axeMode && bot.getMainHandStack().isIn(ItemTags.AXES)) {
-                           if (reach <= PvpBotMod.ATTACK_RANGE.value) {
+                           if (reach <= BotSupport.meleeReach()) {
                               doAttack(server, name, f, target);
                               f.openerPending = false;
                               f.axeMode = false;
@@ -7283,7 +7361,7 @@ final class Fighting {
                            }
                         } else if (f.crit) {
                            boolean falling = !bot.isOnGround() && bot.getVelocity().y < 0.0;
-                           if (falling && reach <= PvpBotMod.ATTACK_RANGE.value && ready) {
+                           if (falling && reach <= BotSupport.meleeReach() && ready) {
                               doAttack(server, name, f, target);
                               f.crit = false;
                               f.sprintHoldUntil = PvpBotMod.globalTick + 3;
@@ -7293,7 +7371,7 @@ final class Fighting {
                            }
                         } else if (PvpBotMod.FALL_CRIT.on()
                            && ready
-                           && reach <= PvpBotMod.ATTACK_RANGE.value
+                           && reach <= BotSupport.meleeReach()
                            && !bot.isOnGround()
                            && bot.getVelocity().y < 0.0) {
                            BotSupport.run(server, "player " + name + " unsprint");
@@ -7301,10 +7379,10 @@ final class Fighting {
                            f.reactAt = -1;
                            f.sprintHoldUntil = PvpBotMod.globalTick + 3;
                         } else {
-                           boolean guaranteedWebCrit = PvpBotMod.WEB_CRIT.on() && BotSupport.inCobweb(target);
+                           boolean guaranteedWebCrit = PvpBotMod.WEB_CRIT.on() && BotSupport.inCobweb(target) || circleOn;
                            boolean sureCrit = !f.wallArmed && f.alwaysCritRoll && alwaysCritNow(bot, target, dist);
                            boolean critPossible = (PvpBotMod.CRIT_CHANCE.value > 0.0 || sureCrit) && dist <= PvpBotMod.CRIT_RANGE.value;
-                           if (ready && (reach <= PvpBotMod.ATTACK_RANGE.value || critPossible || guaranteedWebCrit || f.punishCrit)) {
+                           if (ready && (reach <= BotSupport.meleeReach() || critPossible || guaranteedWebCrit || f.punishCrit)) {
                               if (f.reactAt < 0) {
                                  int lo = Math.min(PvpBotMod.REACT_MIN.asInt(), PvpBotMod.REACT_MAX.asInt());
                                  int hi = Math.max(PvpBotMod.REACT_MIN.asInt(), PvpBotMod.REACT_MAX.asInt());
@@ -7344,7 +7422,7 @@ final class Fighting {
                                     BotSupport.run(server, "player " + name + " jump once");
                                     f.crit = true;
                                     f.critStart = PvpBotMod.globalTick;
-                                 } else if (reach <= PvpBotMod.ATTACK_RANGE.value) {
+                                 } else if (reach <= BotSupport.meleeReach()) {
                                     doAttack(server, name, f, target);
                                  }
                               }
@@ -8605,7 +8683,7 @@ final class Fighting {
          if (whiffed
             && f.phase == PvpBotMod.Phase.FIGHT
             && bot.getAttackCooldownProgress(0.5F) >= 1.0F
-            && reach <= PvpBotMod.ATTACK_RANGE.value
+            && reach <= BotSupport.meleeReach()
             && PvpBotMod.globalTick >= f.flinchUntil
             && chance(PvpBotMod.MIRROR_PUNISH.value)) {
             doAttack(server, name, f, target);
@@ -9927,7 +10005,7 @@ final class Fighting {
    }
 
    static double fleeDist(PvpBotMod.Fight f) {
-      return PvpBotMod.FLEE_DIST.value;
+      return f.pressureFleeDist > 0.0 ? f.pressureFleeDist : PvpBotMod.FLEE_DIST.value;
    }
 
    static void abortHeal(MinecraftServer server, String name, PvpBotMod.Fight f) {
@@ -9947,6 +10025,7 @@ final class Fighting {
       f.weaponSlot = -1;
       f.started = false;
       f.hopping = false;
+      f.clearHealFlags();
    }
 
    static boolean targetMaceThreat(ServerPlayerEntity bot, ServerPlayerEntity target) {
@@ -11554,7 +11633,7 @@ final class Fighting {
          }
 
          boolean falling = !bot.isOnGround() && bot.getVelocity().y < 0.0;
-         if (falling && BotSupport.rayReach(bot, target, PvpBotMod.ATTACK_RANGE.value)) {
+         if (falling && BotSupport.rayReach(bot, target, BotSupport.meleeReach())) {
             boolean hit = doAttack(server, name, f, target);
             bot.fallDistance = 0.0;
             smashResult(f, hit);
@@ -12194,7 +12273,7 @@ final class Fighting {
          }
 
          boolean falling = !bot.isOnGround() && vel.y < 0.0;
-         if (el >= 1 && falling && BotSupport.rayReach(bot, target, PvpBotMod.ATTACK_RANGE.value)) {
+         if (el >= 1 && falling && BotSupport.rayReach(bot, target, BotSupport.meleeReach())) {
             boolean burstMace = hasWindBurst(bot.getMainHandStack());
             boolean hit = doAttack(server, name, f, target);
             bot.fallDistance = 0.0;
@@ -12460,7 +12539,7 @@ final class Fighting {
          }
 
          boolean falling = bot.getVelocity().y < 0.0;
-         if (falling && bot.fallDistance > 1.5 && BotSupport.rayReach(bot, target, PvpBotMod.ATTACK_RANGE.value)) {
+         if (falling && bot.fallDistance > 1.5 && BotSupport.rayReach(bot, target, BotSupport.meleeReach())) {
             boolean hit = doAttack(server, name, f, target);
             bot.fallDistance = 0.0;
             smashResult(f, hit);
@@ -12593,7 +12672,7 @@ final class Fighting {
          }
 
          // wait one tick after the swap so the axe is really in hand, then hit on the last tick before contact
-         if (PvpBotMod.globalTick - f.slamTick < 1 || !BotSupport.rayReach(bot, target, PvpBotMod.ATTACK_RANGE.value) || !bot.canSee(target)) {
+         if (PvpBotMod.globalTick - f.slamTick < 1 || !BotSupport.rayReach(bot, target, BotSupport.meleeReach()) || !bot.canSee(target)) {
             return 1;
          }
 
@@ -12621,7 +12700,7 @@ final class Fighting {
 
       f.slamStage = 0;
       f.slamRoll = 2;
-      if (bot.isOnGround() || !BotSupport.rayReach(bot, target, PvpBotMod.ATTACK_RANGE.value + 0.6)) {
+      if (bot.isOnGround() || !BotSupport.rayReach(bot, target, BotSupport.meleeReach() + 0.2)) {
          f.lastHit = false;
          return bot.isOnGround() ? 2 : 0;
       }
@@ -12700,7 +12779,7 @@ final class Fighting {
          }
 
          double reach = BotSupport.reachDistance(bot, target);
-         if (reach <= PvpBotMod.ATTACK_RANGE.value || reach > PvpBotMod.SPEAR_REACH.value + 0.5) {
+         if (reach <= BotSupport.meleeReach() || reach > PvpBotMod.SPEAR_REACH.value + 0.5) {
             return 0;
          }
 
@@ -12794,7 +12873,7 @@ final class Fighting {
 
          if (bot.isSprinting()
             && bot.getAttackCooldownProgress(0.5F) >= 0.9F
-            && BotSupport.rayReach(bot, target, PvpBotMod.ATTACK_RANGE.value)) {
+            && BotSupport.rayReach(bot, target, BotSupport.meleeReach())) {
             doAttack(server, name, f, target);
             f.ekHit = true;
             f.ekHitTick = PvpBotMod.globalTick;
@@ -14192,6 +14271,10 @@ final class Fighting {
    }
 
    static void fleePhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (healPressureStep(server, name, f, bot, target, dist)) {
+         return;
+      }
+
       double hp = bot.getHealth() + bot.getAbsorptionAmount();
       if (f.fleeFor != 3 && !f.inCocoon && BotSupport.inCobweb(bot)) {
          // a web holds the bot: running away goes nowhere, so heal on the spot (or fight on)
@@ -14327,6 +14410,14 @@ final class Fighting {
    }
 
    static void eatPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (f.mirrorEat && mirrorStopCheck(server, name, f, bot, target, dist)) {
+         return;
+      }
+
+      if (healPressureStep(server, name, f, bot, target, dist)) {
+         return;
+      }
+
       if (PvpBotMod.EAT_FULL_SPEED.on() && !bot.isSprinting() && PvpBotMod.globalTick % 2 == 0) {
          BotSupport.run(server, "player " + name + " sprint");
       }
@@ -14347,6 +14438,26 @@ final class Fighting {
          f.eaten++;
          double hpNow = bot.getHealth() + bot.getAbsorptionAmount();
          boolean healthy = PvpBotMod.EAT_UNTIL_HEARTS.value <= 0.0 || hpNow >= PvpBotMod.EAT_UNTIL_HEARTS.value * 2.0;
+         if (f.mirrorEat) {
+            // the target is healing, so keep healing until it fights again or the bot is healthy
+            if (hpNow < mirrorBound(bot) && f.mirrorFight < 3 && f.eaten < 8 && BotSupport.findFoodIndex(bot) >= 0) {
+               startEat(server, name, f, bot, true);
+            } else {
+               mirrorEnd(server, name, f, "mirror heal done");
+            }
+
+            return;
+         }
+
+         if (f.pressureGapple) {
+            // one golden apple eaten under pressure: knock the target away now, then heal properly
+            f.pressureGapple = false;
+            if (startEatKnockback(server, name, f, bot, target, dist)) {
+               flog(f, "heal pressure: gapple eaten, knocking the target away");
+               return;
+            }
+         }
+
          if (f.windLoop) {
             // wind charge heal loop: one food item, then another wind charge away, until healthy
             boolean more = !healthy
@@ -14382,6 +14493,320 @@ final class Fighting {
          } else {
             endRetreat(server, name, f);
          }
+      }
+   }
+
+   // ---------------------------------------------------------------------
+   // Mirror heal, heal pressure and front webs
+   // ---------------------------------------------------------------------
+
+   /** health (half hearts) at which the bot counts as healed enough. */
+   static double mirrorBound(ServerPlayerEntity bot) {
+      double u = PvpBotMod.EAT_UNTIL_HEARTS.value;
+      return u > 0.0 ? u * 2.0 : bot.getMaxHealth() - 2.0;
+   }
+
+   /** remembers when the target last hurt the bot (the fight phase is not running while it heals). */
+   static void noteHurt(PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
+      double hp = bot.getHealth() + bot.getAbsorptionAmount();
+      if (f.pressLastHp >= 0.0 && hp < f.pressLastHp - 0.01 && bot.getAttacker() == target) {
+         f.pressHurtTick = PvpBotMod.globalTick;
+      }
+
+      f.pressLastHp = hp;
+   }
+
+   /** the target is eating or drinking: the bot uses the window to heal too, on the spot. */
+   static boolean mirrorHealStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist, double hpNow) {
+      if (!PvpBotMod.MIRROR_HEAL.on()
+         || !BotSupport.targetHealing(target)
+         || PvpBotMod.globalTick < f.nextEatTick
+         || hpNow >= mirrorBound(bot)
+         || healUnsafe(f, bot, target)
+         || BotSupport.inCobweb(bot)
+         || BotSupport.findFoodIndex(bot) < 0) {
+         return false;
+      }
+
+      startEat(server, name, f, bot, true);
+      if (f.phase != PvpBotMod.Phase.EAT) {
+         return false;
+      }
+
+      f.mirrorEat = true;
+      f.mirrorFight = 0;
+      f.eaten = 0;
+      f.pressLastHp = -1.0;
+      flog(f, "target is healing: healing too, hp=" + String.format(Locale.ROOT, "%.1f", hpNow));
+      return true;
+   }
+
+   /** true when the mirror heal ended (target fights again, or the bot is healthy). */
+   static boolean mirrorStopCheck(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      noteHurt(f, bot, target);
+      boolean fighting = !BotSupport.targetHealing(target) && (dist <= PvpBotMod.MIRROR_FIGHT_DIST.value || PvpBotMod.globalTick - f.pressHurtTick < 10);
+      f.mirrorFight = fighting ? f.mirrorFight + 1 : 0;
+      double hp = bot.getHealth() + bot.getAbsorptionAmount();
+      if (hp >= mirrorBound(bot)) {
+         mirrorEnd(server, name, f, "mirror heal: healthy enough");
+         return true;
+      } else if (f.mirrorFight >= 3) {
+         mirrorEnd(server, name, f, "mirror heal: the target fights again");
+         return true;
+      } else {
+         return false;
+      }
+   }
+
+   static void mirrorEnd(MinecraftServer server, String name, PvpBotMod.Fight f, String why) {
+      BotSupport.run(server, "player " + name + " use");
+      BotSupport.run(server, "player " + name + " stop");
+      flog(f, why);
+      f.mirrorEat = false;
+      f.mirrorFight = 0;
+      f.eaten = 0;
+      f.phase = PvpBotMod.Phase.FIGHT;
+      f.nextEatTick = PvpBotMod.globalTick + 40;
+      f.weaponSlot = -1;
+      f.started = false;
+      f.hopping = false;
+      BotSupport.run(server, "player " + name + " move forward");
+   }
+
+   /** the bot is trying to heal but the target keeps hitting it: roll once per heal attempt. */
+   static boolean healPressureStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (!PvpBotMod.HEAL_PRESSURE.on() || f.pressureRolled || f.inCocoon || f.mirrorEat || f.windLoop) {
+         return false;
+      }
+
+      boolean healing = f.phase == PvpBotMod.Phase.FLEE && f.fleeFor == 0 || f.phase == PvpBotMod.Phase.EAT;
+      noteHurt(f, bot, target);
+      if (!healing || BotSupport.inCobweb(bot) || dist > 5.5) {
+         return false;
+      }
+
+      int hurt = Math.max(f.lastHurtTick, f.pressHurtTick);
+      if (PvpBotMod.globalTick - hurt > 15) {
+         return false;
+      }
+
+      f.pressureRolled = true;
+      boolean webOk = BotSupport.countItem(bot, Items.COBWEB) >= 1;
+      boolean gapOk = gappleIndex(bot) >= 0 && PvpBotMod.EAT_KNOCKBACK.on();
+      boolean web = chance(PvpBotMod.HEAL_PRESSURE_WEB.value);
+      if (web && !webOk) {
+         web = false;
+      }
+
+      if (!web && !gapOk) {
+         if (!webOk) {
+            return false;
+         }
+
+         web = true;
+      }
+
+      if (web) {
+         java.util.List<BlockPos> cells = pressureWebCells(bot, target);
+         if (!cells.isEmpty() && startWebSeq(server, name, f, bot, cells, 1)) {
+            flog(f, "heal pressure: webbing the target (" + cells.size() + ") then retreating to heal");
+            return true;
+         }
+
+         return false;
+      }
+
+      flog(f, "heal pressure: one golden apple, then knock the target away");
+      f.pressureGapple = true;
+      if (f.phase == PvpBotMod.Phase.FLEE) {
+         startEat(server, name, f, bot, true);
+         if (f.phase != PvpBotMod.Phase.EAT) {
+            f.pressureGapple = false;
+         }
+
+         return f.phase == PvpBotMod.Phase.EAT;
+      }
+
+      return false;
+   }
+
+   static java.util.List<BlockPos> pressureWebCells(ServerPlayerEntity bot, ServerPlayerEntity target) {
+      World level = BotSupport.sw(bot);
+      BlockPos t = target.getBlockPos();
+      java.util.List<BlockPos> near = new java.util.ArrayList<>();
+      for (int dx = -1; dx <= 1; dx++) {
+         for (int dz = -1; dz <= 1; dz++) {
+            if (dx != 0 || dz != 0) {
+               near.add(t.add(dx, 0, dz));
+            }
+         }
+      }
+
+      near.sort(java.util.Comparator.comparingDouble(c -> {
+         double ax = c.getX() + 0.5 - bot.getX();
+         double az = c.getZ() + 0.5 - bot.getZ();
+         return ax * ax + az * az;
+      }));
+      java.util.List<BlockPos> cands = new java.util.ArrayList<>();
+      cands.add(t);
+      cands.addAll(near);
+      int want = 1 + ThreadLocalRandom.current().nextInt(3);
+      java.util.List<BlockPos> out = new java.util.ArrayList<>();
+      for (BlockPos c : cands) {
+         if (out.size() >= want) {
+            break;
+         }
+
+         if (level.getBlockState(c).isAir() && !level.getBlockState(c.down()).isAir()) {
+            out.add(c.toImmutable());
+         }
+      }
+
+      return out;
+   }
+
+   /** a target closes in from about 7 blocks: put 2-4 webs in front of the bot in case it jumps onto it. */
+   static boolean frontWebStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (!PvpBotMod.FRONT_WEB.on()) {
+         return false;
+      }
+
+      int now = PvpBotMod.globalTick;
+      if (now - f.wsSampleTick >= 5) {
+         f.wsClosing = now - f.wsSampleTick <= 12 && f.wsSampleDist - dist > 0.4;
+         f.wsSampleDist = dist;
+         f.wsSampleTick = now;
+      }
+
+      double d = PvpBotMod.FRONT_WEB_DIST.value;
+      if (!f.wsClosing
+         || dist > d + 1.0
+         || dist < d - 2.5
+         || now < f.nextFrontWebTick
+         || !bot.isOnGround()
+         || BotSupport.inCobweb(bot)
+         || BotSupport.countItem(bot, Items.COBWEB) < 2) {
+         return false;
+      }
+
+      f.nextFrontWebTick = now + Math.max(20, (int)(PvpBotMod.FRONT_WEB_COOLDOWN.value * 20.0));
+      if (!chance(PvpBotMod.FRONT_WEB_CHANCE.value)) {
+         return false;
+      }
+
+      World level = BotSupport.sw(bot);
+      double dx = target.getX() - bot.getX();
+      double dz = target.getZ() - bot.getZ();
+      if (dx * dx + dz * dz < 0.01) {
+         return false;
+      }
+
+      double base = Math.atan2(dz, dx);
+      int n = 2 + ThreadLocalRandom.current().nextInt(3);
+      int floorY = bot.getBlockPos().getY();
+      java.util.List<BlockPos> cells = new java.util.ArrayList<>();
+      for (int tries = 0; tries < 30 && cells.size() < n; tries++) {
+         double ang = base + Math.toRadians((ThreadLocalRandom.current().nextDouble() * 2.0 - 1.0) * 40.0);
+         double r = 1.5 + ThreadLocalRandom.current().nextDouble() * 2.0;
+         BlockPos c = BlockPos.ofFloored(bot.getX() + Math.cos(ang) * r, floorY, bot.getZ() + Math.sin(ang) * r);
+         if (!cells.contains(c) && !c.equals(bot.getBlockPos()) && level.getBlockState(c).isAir() && !level.getBlockState(c.down()).isAir()) {
+            cells.add(c);
+         }
+      }
+
+      if (cells.isEmpty() || !startWebSeq(server, name, f, bot, cells, 0)) {
+         return false;
+      }
+
+      flog(f, "front webs: " + cells.size() + " cobwebs, target closing in at " + String.format(Locale.ROOT, "%.1f", dist));
+      return true;
+   }
+
+   static boolean startWebSeq(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, java.util.List<BlockPos> cells, int after) {
+      int idx = BotSupport.findItemIndex(bot, Items.COBWEB);
+      int slot = idx < 0 ? -1 : BotSupport.toHotbar(bot, idx, BotSupport.findWeaponSlot(bot));
+      if (slot < 0 || cells.isEmpty()) {
+         return false;
+      }
+
+      BotSupport.run(server, "player " + name + " stop");
+      BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+      clearFightFlags(f);
+      f.wsCells.clear();
+      f.wsCells.addAll(cells);
+      f.wsIdx = 0;
+      f.wsStage = 0;
+      f.wsAfter = after;
+      f.wsStart = PvpBotMod.globalTick;
+      f.wsNext = PvpBotMod.globalTick + 1;
+      f.phase = PvpBotMod.Phase.WEBSEQ;
+      return true;
+   }
+
+   static void webSeqPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int now = PvpBotMod.globalTick;
+      if (now - f.wsStart > 80 || f.wsIdx >= f.wsCells.size() || BotSupport.findItemIndex(bot, Items.COBWEB) < 0) {
+         endWebSeq(server, name, f, bot);
+         return;
+      }
+
+      if (now < f.wsNext) {
+         return;
+      }
+
+      BlockPos cell = f.wsCells.get(f.wsIdx);
+      World level = BotSupport.sw(bot);
+      if (level.getBlockState(cell).isOf(Blocks.COBWEB) || bot.squaredDistanceTo(cell.getX() + 0.5, cell.getY() + 0.5, cell.getZ() + 0.5) > 20.0) {
+         f.wsIdx++;
+         f.wsStage = 0;
+         return;
+      }
+
+      if (f.wsStage == 0) {
+         int idx = BotSupport.findItemIndex(bot, Items.COBWEB);
+         int slot = idx < 0 ? -1 : BotSupport.toHotbar(bot, idx, BotSupport.findWeaponSlot(bot));
+         if (slot >= 0) {
+            BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+         }
+
+         // aim a little toward the bot so the ray hits the floor in front of a target standing in the cell
+         double ux = bot.getX() - (cell.getX() + 0.5);
+         double uz = bot.getZ() - (cell.getZ() + 0.5);
+         double ul = Math.sqrt(ux * ux + uz * uz);
+         double sx = ul > 0.05 && f.wsAfter == 1 ? ux / ul * 0.35 : 0.0;
+         double sz = ul > 0.05 && f.wsAfter == 1 ? uz / ul * 0.35 : 0.0;
+         BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(cell.getX() + 0.5 + sx) + " " + BotSupport.fmt(cell.getY()) + " " + BotSupport.fmt(cell.getZ() + 0.5 + sz));
+         f.wsStage = 1;
+         f.wsNext = now + 2;
+      } else {
+         BotSupport.useOnce(server, name, f);
+         f.wsStage = 0;
+         f.wsIdx++;
+         f.wsNext = now + 2;
+      }
+   }
+
+   static void endWebSeq(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot) {
+      World level = BotSupport.sw(bot);
+      if (PvpBotMod.WEB_LIFETIME.asInt() > 0) {
+         for (BlockPos c : f.wsCells) {
+            if (level.getBlockState(c).isOf(Blocks.COBWEB)) {
+               PvpBotMod.PLACED_WEBS.add(new PvpBotMod.PlacedWeb(level, c, PvpBotMod.globalTick + PvpBotMod.WEB_LIFETIME.asInt()));
+            }
+         }
+      }
+
+      int after = f.wsAfter;
+      BotSupport.run(server, "player " + name + " stop");
+      f.wsCells.clear();
+      f.wsStage = 0;
+      f.wsIdx = 0;
+      f.weaponSlot = -1;
+      if (after == 1) {
+         f.pressureFleeDist = PvpBotMod.HEAL_PRESSURE_BACK.value;
+         startFlee(server, name, f, 0);
+      } else {
+         f.reset();
       }
    }
 
@@ -14971,6 +15396,9 @@ final class Gui {
       cat("Mace Pressure", "macefinishaggro", "macefinishhearts", "macetotem", "maceretry", "maceretrymax", "macechaingap", "macepressure", "macepressurerange", "webmace", "macekeepdist", "maceaimerror", "macemistake", "windjumplatechance", "windjumplatemax", "divelead");
       cat("Opening", "opening", "openingdist", "openwait", "openwebchance", "openwebcount");
       cat("Human", "flickturns", "tracklag", "surprisechance", "surprisedelaymin", "surprisedelaymax", "panichearts", "panichopchance", "confidence", "confidencestrength", "aimvary", "aimvarymin", "aimvarymax", "aimvarychance", "aimvaryseconds");
+      cat("Eating", "mirrorheal", "mirrorfightdist", "healpressure", "healpressureweb", "healpressureback");
+      cat("Opening", "frontweb", "frontwebchance", "frontwebdist", "frontwebcooldown");
+      cat("Combat", "reachtrim", "critcircle");
       cat("Restock", "restock", "restockdist", "restockbelow", "restockdurability", "restockcooldown", "restockwebs");
       cat("Ranged", "rangedchance", "rangedmin", "rangedmax", "rangedcooldown");
       cat("Sword Tech", "jumpresetwindow", "jumpresetrange", "lowfightchance", "prep", "prepgapples", "prepdist", "prepaxe", "baitchance", "baitticks", "baitcooldown", "pearlaggro", "pearlaggromin", "pearlaggrocd", "pearlaggrohearts");
