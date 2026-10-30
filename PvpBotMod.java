@@ -7039,7 +7039,7 @@ final class Fighting {
                   maybeAim(server, name, f, bot, target);
                   wallWebArm(bot, target, f, dist);
                   boolean vulnerable = BotSupport.targetVulnerable(bot, target);
-                  boolean circleOn = PvpBotMod.CRIT_CIRCLE.on() && (BotSupport.inCobweb(target) || BotSupport.targetHealing(target));
+                  boolean circleOn = PvpBotMod.CRIT_CIRCLE.on() && (BotSupport.inCobweb(target) || targetHealing(target));
                   if (circleOn) {
                      vulnerable = true;
                   }
@@ -14519,7 +14519,7 @@ final class Fighting {
    /** the target is eating or drinking: the bot uses the window to heal too, on the spot. */
    static boolean mirrorHealStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist, double hpNow) {
       if (!PvpBotMod.MIRROR_HEAL.on()
-         || !BotSupport.targetHealing(target)
+         || !targetHealing(target)
          || PvpBotMod.globalTick < f.nextEatTick
          || hpNow >= mirrorBound(bot)
          || healUnsafe(f, bot, target)
@@ -14544,7 +14544,7 @@ final class Fighting {
    /** true when the mirror heal ended (target fights again, or the bot is healthy). */
    static boolean mirrorStopCheck(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
       noteHurt(f, bot, target);
-      boolean fighting = !BotSupport.targetHealing(target) && (dist <= PvpBotMod.MIRROR_FIGHT_DIST.value || PvpBotMod.globalTick - f.pressHurtTick < 10);
+      boolean fighting = !targetHealing(target) && (dist <= PvpBotMod.MIRROR_FIGHT_DIST.value || PvpBotMod.globalTick - f.pressHurtTick < 10);
       f.mirrorFight = fighting ? f.mirrorFight + 1 : 0;
       double hp = bot.getHealth() + bot.getAbsorptionAmount();
       if (hp >= mirrorBound(bot)) {
