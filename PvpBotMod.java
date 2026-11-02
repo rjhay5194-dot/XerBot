@@ -185,6 +185,17 @@ public class PvpBotMod implements ModInitializer {
       "findrange", "find_range", 24.0, 4.0, 128.0, false, "blocks within which auto-target and focus fire look for a target"
    );
    static final PvpBotMod.Opt CRIT_CIRCLE = opt("critcircle", "crit_circle", 1.0, 0.0, 1.0, true, "target in a cobweb or eating/drinking: the bot circles it up close and crit-jumps every swing");
+   static final PvpBotMod.Opt BACKSTAB = opt("backstab", "backstab", 1.0, 0.0, 1.0, true, "BackStab: the bot rolls it as a fighting style; it closes in, hits from the front, then jumps behind or beside the target and crits, again and again");
+   static final PvpBotMod.Opt BACKSTAB_CHANCE = opt("backstabchance", "backstab_chance", 40.0, 0.0, 100.0, false, "percent chance each roll that the bot fights with BackStab instead of the normal crit/combo/keep-distance style");
+   static final PvpBotMod.Opt BACKSTAB_MIN = opt("backstabmin", "backstab_min", 2.0, 1.0, 8.0, false, "fewest back/side jumps in one BackStab chain");
+   static final PvpBotMod.Opt BACKSTAB_MAX = opt("backstabmax", "backstab_max", 8.0, 1.0, 8.0, false, "most back/side jumps in one BackStab chain");
+   static final PvpBotMod.Opt BACKSTAB_SIDE = opt("backstabside", "backstab_side_chance", 40.0, 0.0, 100.0, false, "percent chance a jump goes to the left or right of the target instead of behind it");
+   static final PvpBotMod.Opt BACKSTAB_COOLDOWN = opt("backstabcooldown", "backstab_cooldown", 6.0, 1.0, 60.0, false, "seconds after a BackStab (or a failed roll) before the style is rolled again");
+   static final PvpBotMod.Opt CLOSE_AIM = opt("closeaim", "close_aim_dist", 2.5, 0.0, 5.0, false, "blocks: inside this distance the bot locks onto the target instantly (no lead, turn limit, spread or overshoot) so a target jumping around it cannot dodge its aim (0 = off)");
+   static final PvpBotMod.Opt CRIT_GUARD = opt("critguard", "crit_guard", 1.0, 0.0, 1.0, true, "raise the shield when the target crits the bot several times in a row (needs a shield; not against axes)");
+   static final PvpBotMod.Opt CRIT_GUARD_HITS = opt("critguardhits", "crit_guard_hits", 2.0, 1.0, 6.0, false, "crits taken in a row (without landing a hit) before the shield goes up");
+   static final PvpBotMod.Opt CRIT_GUARD_MIN = opt("critguardmin", "crit_guard_ticks_min", 12.0, 4.0, 60.0, false, "shortest time in ticks the shield stays up");
+   static final PvpBotMod.Opt CRIT_GUARD_MAX = opt("critguardmax", "crit_guard_ticks_max", 24.0, 4.0, 60.0, false, "longest time in ticks the shield stays up");
    static final PvpBotMod.Opt REACH_TRIM = opt("reachtrim", "reach_trim", 0.1, 0.0, 1.0, false, "blocks shaved off the melee reach so bots never out-reach a normal player");
    static final PvpBotMod.Opt MIRROR_HEAL = opt("mirrorheal", "mirror_heal", 1.0, 0.0, 1.0, true, "when the target is eating or healing the bot eats too (until the target fights again or the bot is healthy)");
    static final PvpBotMod.Opt MIRROR_FIGHT_DIST = opt("mirrorfightdist", "mirror_fight_dist", 5.0, 2.0, 10.0, false, "blocks: a target that stopped healing and is this close counts as fighting again");
@@ -2772,6 +2783,17 @@ public class PvpBotMod implements ModInitializer {
       boolean mirrorEat;
       int mirrorFight;
       int circleDir;
+      int critGuardCount;
+      boolean bsActive;
+      int bsLeft;
+      int bsNextRoll;
+      int bsLastTick;
+      int bsStart;
+      int bsMode;
+      int bsSign = 1;
+      boolean bsClose;
+      boolean bsAir;
+      int critGuardLast = -1000;
 
       void clearHealFlags() {
          this.pressureRolled = false;
@@ -2828,6 +2850,8 @@ public class PvpBotMod implements ModInitializer {
          this.reactAt = -1;
          this.strafeDir = 0;
          this.circleDir = 0;
+         this.bsActive = false;
+         this.bsLeft = 0;
          this.webStage = 0;
          this.axeMode = false;
          this.targetBlocking = false;
@@ -3100,6 +3124,7 @@ public class PvpBotMod implements ModInitializer {
       AFTERCART,
       RELOAD,
       WEBSEQ,
+      BACKSTAB,
       WALLDEF;
    }
 
@@ -4483,6 +4508,12 @@ final class BotSupport {
          double sdy = target.getEyeY() - bot.getEyeY();
          double sp = -Math.toDegrees(Math.atan2(sdy, Math.max(0.1, shl)));
          return "player " + name + " look " + String.format(Locale.ROOT, "%.1f %.1f", ny, sp);
+      }
+
+      if (PvpBotMod.CLOSE_AIM.value > 0.0 && shl < PvpBotMod.CLOSE_AIM.value) {
+         // point-blank: lock on exactly, at once (leading, turn limits, spread and overshoot only make it miss a target circling at 0.5 blocks)
+         f.overshotLast = false;
+         return "player " + name + " look upon " + target.getName().getString() + " eyes";
       }
 
       String turning = limitedTurn(name, bot, target);
@@ -6756,6 +6787,9 @@ final class Fighting {
                   case WEBSEQ:
                      webSeqPhase(server, name, f, bot, target, dist);
                      break;
+                  case BACKSTAB:
+                     backStabPhase(server, name, f, bot, target, dist);
+                     break;
                   default:
                      break;
                }
@@ -6787,7 +6821,11 @@ final class Fighting {
       }
 
       if (PvpBotMod.PRECISION_LOCK.on()) {
-         BotSupport.run(server, BotSupport.lookCmd(name, target.getName().getString()));
+         if (f.lastBot != null && PvpBotMod.CLOSE_AIM.value > 0.0 && BotSupport.reachDistance(f.lastBot, target) <= PvpBotMod.CLOSE_AIM.value) {
+            BotSupport.run(server, "player " + name + " look upon " + target.getName().getString() + " eyes");
+         } else {
+            BotSupport.run(server, BotSupport.lookCmd(name, target.getName().getString()));
+         }
       }
 
       double before = target.getHealth() + target.getAbsorptionAmount();
@@ -6888,6 +6926,29 @@ final class Fighting {
             noteHitTaken(f, critHit);
          }
 
+         if (critHit && PvpBotMod.CRIT_GUARD.on()) {
+            if (PvpBotMod.globalTick - f.critGuardLast > 80) {
+               f.critGuardCount = 0;
+            }
+
+            f.critGuardLast = PvpBotMod.globalTick;
+            f.critGuardCount++;
+            if (f.critGuardCount >= PvpBotMod.CRIT_GUARD_HITS.asInt()
+               && bot.getEquippedStack(EquipmentSlot.OFFHAND).isOf(Items.SHIELD)
+               && !target.getMainHandStack().isIn(ItemTags.AXES)) {
+               int glo = Math.min(PvpBotMod.CRIT_GUARD_MIN.asInt(), PvpBotMod.CRIT_GUARD_MAX.asInt());
+               int ghi = Math.max(PvpBotMod.CRIT_GUARD_MIN.asInt(), PvpBotMod.CRIT_GUARD_MAX.asInt());
+               f.blockUntil = PvpBotMod.globalTick + glo + ThreadLocalRandom.current().nextInt(ghi - glo + 1);
+               if (!f.blocking) {
+                  BotSupport.run(server, "player " + name + " use continuous");
+                  f.blocking = true;
+                  f.threatHold = false;
+               }
+
+               flog(f, "crit guard: crit " + f.critGuardCount + " in a row, shield up");
+            }
+         }
+
          if (critHit && PvpBotMod.COCOON_ON_CRIT.on()) {
             if (PvpBotMod.globalTick - f.critWindowStart > PvpBotMod.COCOON_CRIT_WINDOW.asInt()) {
                f.critWindowStart = PvpBotMod.globalTick;
@@ -6965,6 +7026,7 @@ final class Fighting {
          }
       }
 
+      backStabStep(f, bot, target, dist, hpNow);
       if (cartDefenseStep(server, name, f, bot, target, dist)
          || wallDefStep(server, name, f, bot, target, dist)
          || restockStep(server, name, f, bot, target, dist)
@@ -6981,7 +7043,7 @@ final class Fighting {
          || tntCartStep(server, name, f, bot, target, dist)
          || prepStep(server, name, f, bot, target, dist)
          || pearlAggroStep(server, name, f, bot, target, dist)
-         || baitStep(server, name, f, bot, target, dist)
+         || !f.bsActive && baitStep(server, name, f, bot, target, dist)
          || predWebStep(server, name, f, bot, target, dist)
          || frontWebStep(server, name, f, bot, target, dist)
          || mendStep(server, name, f, bot, target, dist)) {
@@ -7141,6 +7203,9 @@ final class Fighting {
 
                   if (f.attackTick >= 0 && PvpBotMod.globalTick - f.attackTick >= 2) {
                      f.attackTick = -1;
+                     if (f.bsActive) {
+                        // BackStab: no back-away, d-tap or post-swing shield
+                     } else
                      if (!f.edgeHold
                         && !f.wallArmed
                         && PvpBotMod.BACKAWAY_CHANCE.value > 0.0
@@ -7186,7 +7251,7 @@ final class Fighting {
                            }
                         }
 
-                        double effectiveKeep = !vulnerable && !archer ? keepRolled(f) : PvpBotMod.PRESSURE_KEEP_DIST.value;
+                        double effectiveKeep = !vulnerable && !archer && !f.bsActive ? keepRolled(f) : PvpBotMod.PRESSURE_KEEP_DIST.value;
                         if (effectiveKeep > 0.0) {
                            if (!f.hopping && !f.crit) {
                               int want = dist < effectiveKeep - 0.5 ? -1 : (dist > effectiveKeep + 0.5 ? 1 : 0);
@@ -7284,6 +7349,11 @@ final class Fighting {
                      if (lastHitter == bot && hitStamp != f.lastHitStamp) {
                         f.lastHitStamp = hitStamp;
                         f.confidence = Math.min(1.0, f.confidence + 0.12);
+                        f.critGuardCount = 0;
+                        if (f.bsActive && f.bsLeft > 0 && startBackStab(server, name, f, bot, target, dist)) {
+                           return;
+                        }
+
                         f.hitsStreak = 0;
                         f.hitsThreshold = -1;
                         if (f.wallArmed && PvpBotMod.globalTick - f.wallArmTick <= 40) {
@@ -14810,6 +14880,175 @@ final class Fighting {
       }
    }
 
+   // ---------------------------------------------------------------------
+   // BackStab: hit from the front, jump behind / beside the target, crit, repeat
+   // ---------------------------------------------------------------------
+
+   static void backStabStep(PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist, double hpNow) {
+      if (!PvpBotMod.BACKSTAB.on()) {
+         f.bsActive = false;
+         f.bsLeft = 0;
+         return;
+      }
+
+      int now = PvpBotMod.globalTick;
+      if (f.bsActive) {
+         boolean bad = dist > 9.0
+            || hpNow <= PvpBotMod.EAT_HEARTS.value * 2.0
+            || targetMaceThreat(bot, target)
+            || BotSupport.inCobweb(bot)
+            || BotSupport.inCobweb(target)
+            || targetHealing(target)
+            || f.bsLeft > 0 && now - f.bsLastTick > 100
+            || f.bsLeft <= 0 && now - f.bsLastTick > 24;
+         if (bad) {
+            endBackStab(f, "chain over");
+         }
+
+         return;
+      }
+
+      if (now < f.bsNextRoll || dist > 10.0 || BotSupport.inCobweb(target) || targetHealing(target)) {
+         return;
+      }
+
+      f.bsNextRoll = now + Math.max(20, (int)(PvpBotMod.BACKSTAB_COOLDOWN.value * 20.0));
+      if (chance(PvpBotMod.BACKSTAB_CHANCE.value)) {
+         int lo = Math.min(PvpBotMod.BACKSTAB_MIN.asInt(), PvpBotMod.BACKSTAB_MAX.asInt());
+         int hi = Math.max(PvpBotMod.BACKSTAB_MIN.asInt(), PvpBotMod.BACKSTAB_MAX.asInt());
+         f.bsActive = true;
+         f.bsLeft = lo + ThreadLocalRandom.current().nextInt(hi - lo + 1);
+         f.bsLastTick = now;
+         flog(f, "BackStab rolled: " + f.bsLeft + " jumps");
+      }
+   }
+
+   static void endBackStab(PvpBotMod.Fight f, String why) {
+      if (f.bsActive) {
+         flog(f, "BackStab ended: " + why);
+      }
+
+      f.bsActive = false;
+      f.bsLeft = 0;
+      f.bsNextRoll = PvpBotMod.globalTick + Math.max(20, (int)(PvpBotMod.BACKSTAB_COOLDOWN.value * 20.0));
+   }
+
+   /** the spot behind (mode 0) or beside (mode 1, sign = side) the target, 1.3 blocks from it. */
+   static Vec3d backStabPoint(ServerPlayerEntity target, int mode, int sign) {
+      double yaw = Math.toRadians(target.getYaw());
+      double r = 1.3;
+      double ox = mode == 0 ? Math.sin(yaw) * r : Math.cos(yaw) * sign * r;
+      double oz = mode == 0 ? -Math.cos(yaw) * r : Math.sin(yaw) * sign * r;
+      return new Vec3d(target.getX() + ox, target.getY(), target.getZ() + oz);
+   }
+
+   static boolean backStabOk(World level, Vec3d p) {
+      BlockPos c = BlockPos.ofFloored(p.x, p.y + 0.01, p.z);
+      return level.getBlockState(c).isAir()
+         && level.getBlockState(c.up()).isAir()
+         && !level.getBlockState(c.down()).isAir()
+         && !BotSupport.hazardAt(level, p.x, p.y, p.z);
+   }
+
+   static boolean startBackStab(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (dist > 4.5 || !bot.isOnGround() || BotSupport.inCobweb(bot) || BotSupport.inCobweb(target)) {
+         return false;
+      }
+
+      World level = BotSupport.sw(bot);
+      int sign = ThreadLocalRandom.current().nextBoolean() ? 1 : -1;
+      int[][] order = chance(PvpBotMod.BACKSTAB_SIDE.value)
+         ? new int[][]{{1, sign}, {0, sign}, {1, -sign}}
+         : new int[][]{{0, sign}, {1, sign}, {1, -sign}};
+      for (int[] o : order) {
+         Vec3d d = backStabPoint(target, o[0], o[1]);
+         if (backStabOk(level, d)) {
+            int now = PvpBotMod.globalTick;
+            f.bsLeft--;
+            f.bsLastTick = now;
+            f.bsStart = now;
+            f.bsMode = o[0];
+            f.bsSign = o[1];
+            f.bsClose = false;
+            f.bsAir = false;
+            BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(d.x) + " " + BotSupport.fmt(bot.getEyeY()) + " " + BotSupport.fmt(d.z));
+            BotSupport.run(server, "player " + name + " move forward");
+            BotSupport.run(server, "player " + name + " sprint");
+            BotSupport.run(server, "player " + name + " jump once");
+            clearFightFlags(f);
+            f.phase = PvpBotMod.Phase.BACKSTAB;
+            flog(f, "BackStab jump (" + (o[0] == 0 ? "behind" : "side") + "), " + f.bsLeft + " left");
+            return true;
+         }
+      }
+
+      return false;
+   }
+
+   static void finishBackStab(MinecraftServer server, String name, PvpBotMod.Fight f, boolean abort) {
+      BotSupport.run(server, "player " + name + " move forward");
+      BotSupport.run(server, "player " + name + " sprint");
+      f.phase = PvpBotMod.Phase.FIGHT;
+      f.keepMode = 1;
+      f.started = false;
+      f.hopping = false;
+      f.sprintHoldUntil = PvpBotMod.globalTick + 3;
+      if (abort) {
+         endBackStab(f, "jump aborted");
+      }
+   }
+
+   static void backStabPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int now = PvpBotMod.globalTick;
+      int el = now - f.bsStart;
+      double hp = bot.getHealth() + bot.getAbsorptionAmount();
+      if (!target.isAlive() || dist > 6.5 || el > 26 || hp <= PvpBotMod.EAT_HEARTS.value * 2.0 || BotSupport.inCobweb(bot)) {
+         finishBackStab(server, name, f, true);
+         return;
+      }
+
+      boolean onGround = bot.isOnGround();
+      if (!onGround) {
+         f.bsAir = true;
+      }
+
+      Vec3d d = backStabPoint(target, f.bsMode, f.bsSign);
+      double ddx = d.x - bot.getX();
+      double ddz = d.z - bot.getZ();
+      if (!f.bsClose && (ddx * ddx + ddz * ddz <= 0.81 || el >= 10)) {
+         f.bsClose = true;
+         BotSupport.run(server, "player " + name + " unsprint");
+         BotSupport.run(server, "player " + name + " move");
+      }
+
+      if (!f.bsClose) {
+         Vec3d aim = d;
+         if (f.bsMode == 0) {
+            // still in front of the target: swing round its side first instead of running into it
+            double yaw = Math.toRadians(target.getYaw());
+            double rel = (bot.getX() - target.getX()) * -Math.sin(yaw) + (bot.getZ() - target.getZ()) * Math.cos(yaw);
+            if (rel > -0.2) {
+               aim = new Vec3d(target.getX() + Math.cos(yaw) * f.bsSign * 1.6, target.getY(), target.getZ() + Math.sin(yaw) * f.bsSign * 1.6);
+            }
+         }
+
+         BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(aim.x) + " " + BotSupport.fmt(bot.getEyeY()) + " " + BotSupport.fmt(aim.z));
+      } else {
+         BotSupport.run(server, "player " + name + " look upon " + target.getName().getString() + " eyes");
+      }
+
+      boolean ready = bot.getAttackCooldownProgress(0.5F) >= 1.0F;
+      boolean falling = !onGround && bot.getVelocity().y < 0.0;
+      if (f.bsClose && ready && BotSupport.reachDistance(bot, target) <= BotSupport.meleeReach() && (falling || f.bsAir && onGround)) {
+         if (bot.isSprinting()) {
+            BotSupport.run(server, "player " + name + " unsprint");
+         }
+
+         doAttack(server, name, f, target);
+         finishBackStab(server, name, f, false);
+      }
+   }
+
    static void endRetreat(MinecraftServer server, String name, PvpBotMod.Fight f) {
       BotSupport.run(server, "player " + name + " unsneak");
       BotSupport.run(server, "player " + name + " stop");
@@ -15398,7 +15637,7 @@ final class Gui {
       cat("Human", "flickturns", "tracklag", "surprisechance", "surprisedelaymin", "surprisedelaymax", "panichearts", "panichopchance", "confidence", "confidencestrength", "aimvary", "aimvarymin", "aimvarymax", "aimvarychance", "aimvaryseconds");
       cat("Eating", "mirrorheal", "mirrorfightdist", "healpressure", "healpressureweb", "healpressureback");
       cat("Opening", "frontweb", "frontwebchance", "frontwebdist", "frontwebcooldown");
-      cat("Combat", "reachtrim", "critcircle");
+      cat("Combat", "backstab", "backstabchance", "backstabmin", "backstabmax", "backstabside", "backstabcooldown", "reachtrim", "critcircle", "closeaim", "critguard", "critguardhits", "critguardmin", "critguardmax");
       cat("Restock", "restock", "restockdist", "restockbelow", "restockdurability", "restockcooldown", "restockwebs");
       cat("Ranged", "rangedchance", "rangedmin", "rangedmax", "rangedcooldown");
       cat("Sword Tech", "jumpresetwindow", "jumpresetrange", "lowfightchance", "prep", "prepgapples", "prepdist", "prepaxe", "baitchance", "baitticks", "baitcooldown", "pearlaggro", "pearlaggromin", "pearlaggrocd", "pearlaggrohearts");
@@ -16556,7 +16795,7 @@ final class Tiers {
 
    /** options where a LOWER number is the better skill (so when two tiers set one, the lower value wins). */
    static final java.util.Set<PvpBotMod.Opt> INVERSE = new java.util.HashSet<>(Arrays.asList(
-      PvpBotMod.AIM, PvpBotMod.REACT_MIN, PvpBotMod.REACT_MAX, PvpBotMod.AIM_SPREAD, PvpBotMod.WOBBLE, PvpBotMod.MISS_CHANCE, PvpBotMod.OVERSHOOT_CHANCE,
+      PvpBotMod.AIM, PvpBotMod.AIM_VARY_MAX, PvpBotMod.REACT_MIN, PvpBotMod.REACT_MAX, PvpBotMod.AIM_SPREAD, PvpBotMod.WOBBLE, PvpBotMod.MISS_CHANCE, PvpBotMod.OVERSHOOT_CHANCE,
       PvpBotMod.FLINCH_CHANCE, PvpBotMod.MACE_AIM_ERROR, PvpBotMod.MACE_MISTAKE, PvpBotMod.WIND_JUMP_LATE_CHANCE, PvpBotMod.WINDMACE_COOLDOWN,
       PvpBotMod.WINDMACE_HEARTS, PvpBotMod.MACE_CHAIN_GAP, PvpBotMod.WEBESCAPE_DELAY_MIN, PvpBotMod.WEBESCAPE_DELAY_MAX
    ));
@@ -16582,6 +16821,19 @@ final class Tiers {
             ex(m, PvpBotMod.BACKAWAY_CHANCE, 30, 90, q);
             ex(m, PvpBotMod.WALLWEB_CHANCE, 10, 70, q);
             ex(m, PvpBotMod.JUMP_RESET, 5, 70, q);
+            if (tier >= 7) {
+               // HT2 .. HT1: barely any aim or hit failures
+               double t = (tier - 7) / 2.0;
+               ex(m, PvpBotMod.MISS_CHANCE, 0.5, 0.0, t);
+               ex(m, PvpBotMod.WOBBLE, 0.3, 0.0, t);
+               ex(m, PvpBotMod.AIM_SPREAD, 3, 0, t);
+               ex(m, PvpBotMod.OVERSHOOT_CHANCE, 1, 0, t);
+               ex(m, PvpBotMod.AIM, 1, 0, t);
+               ex(m, PvpBotMod.AIM_VARY_MAX, 1, 0, t);
+               ex(m, PvpBotMod.AIM_VARY_MIN, 0, 0, t);
+               ex(m, PvpBotMod.REACT_MIN, 1, 0, t);
+               ex(m, PvpBotMod.REACT_MAX, 2, 1, t);
+            }
             break;
          case "smp":
             // webbing, escaping, pearling, healing
