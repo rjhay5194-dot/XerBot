@@ -185,6 +185,16 @@ public class PvpBotMod implements ModInitializer {
       "findrange", "find_range", 24.0, 4.0, 128.0, false, "blocks within which auto-target and focus fire look for a target"
    );
    static final PvpBotMod.Opt CRIT_CIRCLE = opt("critcircle", "crit_circle", 1.0, 0.0, 1.0, true, "target in a cobweb or eating/drinking: the bot circles it up close and crit-jumps every swing");
+   static final PvpBotMod.Opt KNOCK_EAT = opt("knockeat", "knock_eat", 1.0, 0.0, 1.0, true, "knocked 5-8 blocks away from the target: the bot may eat one golden apple while still looking at it, then fights back");
+   static final PvpBotMod.Opt KNOCK_EAT_CHANCE = opt("knockeatchance", "knock_eat_chance", 60.0, 0.0, 100.0, false, "percent chance the bot uses the gap after a knockback to eat a golden apple");
+   static final PvpBotMod.Opt KNOCK_EAT_MIN = opt("knockeatmin", "knock_eat_min_dist", 5.0, 3.0, 12.0, false, "blocks: the knocked-away distance must be at least this");
+   static final PvpBotMod.Opt KNOCK_EAT_MAX = opt("knockeatmax", "knock_eat_max_dist", 8.0, 3.0, 14.0, false, "blocks: and at most this");
+   static final PvpBotMod.Opt COCOON_MIN_DIST = opt("cocoonmindist", "cocoon_min_dist", 3.0, 0.0, 8.0, false, "no cocoon when the target is closer than this: the bot webs the ground in front of it and eats instead (0 = old behavior)");
+   static final PvpBotMod.Opt JR_HIT = opt("jrhit", "jump_reset_on_hit", 1.0, 0.0, 1.0, true, "real jump reset: when the target's melee hit lands the bot jumps right after it (cuts the knockback so it is not pushed out of reach)");
+   static final PvpBotMod.Opt JR_HIT_CHANCE = opt("jrhitchance", "jump_reset_on_hit_chance", 70.0, 0.0, 100.0, false, "percent of landed hits the bot answers with a jump reset (tiers scale this)");
+   static final PvpBotMod.Opt JR_HIT_LATE = opt("jrhitlate", "jump_reset_on_hit_late_ticks", 2.0, 0.0, 8.0, false, "the jump comes 0 to this many ticks after the hit (0 = perfect timing; lower tiers are later)");
+   static final PvpBotMod.Opt KEEP_VARY_CHANCE = opt("keepvarychance", "keep_vary_chance", 35.0, 0.0, 100.0, false, "percent chance each spacing roll drops BELOW keepdistance (to anything between keepvarymin and keepdistance)");
+   static final PvpBotMod.Opt KEEP_VARY_MIN = opt("keepvarymin", "keep_vary_min", 0.0, 0.0, 3.0, false, "lowest spacing a roll can drop to (0 = right on top of the target)");
    static final PvpBotMod.Opt BACKSTAB = opt("backstab", "backstab", 1.0, 0.0, 1.0, true, "BackStab: the bot rolls it as a fighting style; it closes in, hits from the front, then jumps behind or beside the target and crits, again and again");
    static final PvpBotMod.Opt BACKSTAB_CHANCE = opt("backstabchance", "backstab_chance", 40.0, 0.0, 100.0, false, "percent chance each roll that the bot fights with BackStab instead of the normal crit/combo/keep-distance style");
    static final PvpBotMod.Opt BACKSTAB_MIN = opt("backstabmin", "backstab_min", 2.0, 1.0, 8.0, false, "fewest back/side jumps in one BackStab chain");
@@ -202,10 +212,6 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt HEAL_PRESSURE = opt("healpressure", "heal_pressure", 1.0, 0.0, 1.0, true, "target keeps hitting the bot while it tries to heal: roll web-and-retreat or one gapple plus knockback");
    static final PvpBotMod.Opt HEAL_PRESSURE_WEB = opt("healpressureweb", "heal_pressure_web_chance", 50.0, 0.0, 100.0, false, "percent chance the roll is webs on the target + retreat (otherwise: 1 gapple, knock back, heal)");
    static final PvpBotMod.Opt HEAL_PRESSURE_BACK = opt("healpressureback", "heal_pressure_back_distance", 5.0, 3.0, 10.0, false, "blocks the bot retreats after webbing the target, before it heals");
-   static final PvpBotMod.Opt FRONT_WEB = opt("frontweb", "front_web", 1.0, 0.0, 1.0, true, "target closing in from far: place 2-4 cobwebs in front of the bot in case it jumps on it");
-   static final PvpBotMod.Opt FRONT_WEB_CHANCE = opt("frontwebchance", "front_web_chance", 90.0, 0.0, 100.0, false, "percent chance to place the front webs when a target closes in");
-   static final PvpBotMod.Opt FRONT_WEB_DIST = opt("frontwebdist", "front_web_dist", 7.0, 4.0, 12.0, false, "blocks: distance at which a closing target triggers the front webs");
-   static final PvpBotMod.Opt FRONT_WEB_COOLDOWN = opt("frontwebcooldown", "front_web_cooldown", 6.0, 1.0, 60.0, false, "seconds before the front webs can be rolled again");
    static final PvpBotMod.Opt AIM_VARY = opt("aimvary", "aim_vary", 1.0, 0.0, 1.0, true, "bot aim speed re-rolls between aimvarymin and aimvarymax ticks (overrides 'aim' while on)");
    static final PvpBotMod.Opt AIM_VARY_MIN = opt("aimvarymin", "aim_vary_min", 0.0, 0.0, 8.0, false, "fastest aim ticks it can roll (0 = instant)");
    static final PvpBotMod.Opt AIM_VARY_MAX = opt("aimvarymax", "aim_vary_max", 8.0, 0.0, 8.0, false, "slowest aim ticks it can roll");
@@ -2792,11 +2798,19 @@ public class PvpBotMod implements ModInitializer {
       int bsMode;
       int bsSign = 1;
       boolean bsClose;
+      int bsKeyF = 9;
+      int bsKeyS = 9;
+      boolean keepRollLow;
+      int jrHitTick = -1;
+      boolean knockEat;
+      int nextKnockEat;
+      int nextCloseWeb;
       boolean bsAir;
       int critGuardLast = -1000;
 
       void clearHealFlags() {
          this.pressureRolled = false;
+         this.knockEat = false;
          this.pressureGapple = false;
          this.pressureFleeDist = 0.0;
          this.pressLastHp = -1.0;
@@ -2850,6 +2864,7 @@ public class PvpBotMod implements ModInitializer {
          this.reactAt = -1;
          this.strafeDir = 0;
          this.circleDir = 0;
+         this.jrHitTick = -1;
          this.bsActive = false;
          this.bsLeft = 0;
          this.webStage = 0;
@@ -6924,6 +6939,10 @@ final class Fighting {
             && !target.isSprinting();
          if (bot.getAttacker() == target) {
             noteHitTaken(f, critHit);
+            if (PvpBotMod.JR_HIT.on() && dist <= 5.5 && bot.isOnGround() && f.jrHitTick < 0 && chance(PvpBotMod.JR_HIT_CHANCE.value)) {
+               int jrLate = Math.max(0, PvpBotMod.JR_HIT_LATE.asInt());
+               f.jrHitTick = PvpBotMod.globalTick + (jrLate <= 0 ? 0 : ThreadLocalRandom.current().nextInt(jrLate + 1));
+            }
          }
 
          if (critHit && PvpBotMod.CRIT_GUARD.on()) {
@@ -6984,6 +7003,7 @@ final class Fighting {
 
       f.lastTargetScale = targetScale;
       jumpResetStep(server, name, f, bot, dist, targetScale);
+      jumpHitStep(server, name, f, bot);
       f.confidence *= 0.999;
       panicHopStep(server, name, f, bot);
       maceTotemStep(server, name, f, bot, target);
@@ -7045,7 +7065,7 @@ final class Fighting {
          || pearlAggroStep(server, name, f, bot, target, dist)
          || !f.bsActive && baitStep(server, name, f, bot, target, dist)
          || predWebStep(server, name, f, bot, target, dist)
-         || frontWebStep(server, name, f, bot, target, dist)
+         || knockEatStep(server, name, f, bot, target, dist, hpNow)
          || mendStep(server, name, f, bot, target, dist)) {
          return;
       }
@@ -10026,8 +10046,16 @@ final class Fighting {
    static double keepRolled(PvpBotMod.Fight f) {
       double lo = Math.min(PvpBotMod.KEEP_DISTANCE.value, PvpBotMod.KEEP_DISTANCE_MAX.value);
       double hi = Math.max(PvpBotMod.KEEP_DISTANCE.value, PvpBotMod.KEEP_DISTANCE_MAX.value);
-      if (PvpBotMod.globalTick >= f.keepRollUntil || f.keepRoll < lo - 0.01 || f.keepRoll > hi + 0.01) {
+      if (PvpBotMod.globalTick >= f.keepRollUntil || f.keepRoll < lo - 0.01 && !f.keepRollLow || f.keepRoll > hi + 0.01) {
          f.keepRoll = lo + ThreadLocalRandom.current().nextDouble() * (hi - lo);
+         f.keepRollLow = false;
+         if (chance(PvpBotMod.KEEP_VARY_CHANCE.value)) {
+            // sometimes the spacing drops well below the usual range (2 can become 1, 0.5 or even 0)
+            double floor = Math.min(PvpBotMod.KEEP_VARY_MIN.value, lo);
+            f.keepRoll = floor + ThreadLocalRandom.current().nextDouble() * (lo - floor);
+            f.keepRollLow = true;
+         }
+
          f.keepRollUntil = PvpBotMod.globalTick + 30 + ThreadLocalRandom.current().nextInt(50);
       }
 
@@ -11265,6 +11293,24 @@ final class Fighting {
    // ---------------------------------------------------------------------
    // Sword tech: jump reset window, prep on sight, bait and punish, pearl aggression, mace spacing
    // ---------------------------------------------------------------------
+
+   /** real jump reset: a jump right after the target's melee hit lands (the sources put the ideal at about 1-2 ticks). */
+   static void jumpHitStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot) {
+      if (f.jrHitTick < 0 || PvpBotMod.globalTick < f.jrHitTick) {
+         return;
+      }
+
+      f.jrHitTick = -1;
+      if (!bot.isOnGround() || BotSupport.inCobweb(bot) || f.blocking) {
+         return;
+      }
+
+      if (!bot.isSprinting() && f.keepMode >= 0) {
+         BotSupport.run(server, "player " + name + " sprint");
+      }
+
+      BotSupport.run(server, "player " + name + " jump once");
+   }
 
    /** Jump reset: jump at a random moment in the last <= 10 ticks before the target's swing is ready again. */
    static void jumpResetStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, double dist, double targetScale) {
@@ -14480,6 +14526,15 @@ final class Fighting {
    }
 
    static void eatPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      if (f.knockEat) {
+         // knocked away: keep the target in the crosshair while eating the apple; stop only if it is about to hit again
+         BotSupport.run(server, "player " + name + " look upon " + target.getName().getString() + " eyes");
+         if (dist <= 2.0) {
+            mirrorEnd(server, name, f, "knock-eat: the target is back on the bot");
+            return;
+         }
+      }
+
       if (f.mirrorEat && mirrorStopCheck(server, name, f, bot, target, dist)) {
          return;
       }
@@ -14508,6 +14563,11 @@ final class Fighting {
          f.eaten++;
          double hpNow = bot.getHealth() + bot.getAbsorptionAmount();
          boolean healthy = PvpBotMod.EAT_UNTIL_HEARTS.value <= 0.0 || hpNow >= PvpBotMod.EAT_UNTIL_HEARTS.value * 2.0;
+         if (f.knockEat) {
+            mirrorEnd(server, name, f, "knock-eat done: one golden apple, back to the fight");
+            return;
+         }
+
          if (f.mirrorEat) {
             // the target is healing, so keep healing until it fights again or the bot is healthy
             if (hpNow < mirrorBound(bot) && f.mirrorFight < 3 && f.eaten < 8 && BotSupport.findFoodIndex(bot) >= 0) {
@@ -14633,6 +14693,7 @@ final class Fighting {
       BotSupport.run(server, "player " + name + " stop");
       flog(f, why);
       f.mirrorEat = false;
+      f.knockEat = false;
       f.mirrorFight = 0;
       f.eaten = 0;
       f.phase = PvpBotMod.Phase.FIGHT;
@@ -14645,7 +14706,7 @@ final class Fighting {
 
    /** the bot is trying to heal but the target keeps hitting it: roll once per heal attempt. */
    static boolean healPressureStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
-      if (!PvpBotMod.HEAL_PRESSURE.on() || f.pressureRolled || f.inCocoon || f.mirrorEat || f.windLoop) {
+      if (!PvpBotMod.HEAL_PRESSURE.on() || f.pressureRolled || f.inCocoon || f.mirrorEat || f.knockEat || f.windLoop) {
          return false;
       }
 
@@ -14735,60 +14796,78 @@ final class Fighting {
       return out;
    }
 
-   /** a target closes in from about 7 blocks: put 2-4 webs in front of the bot in case it jumps onto it. */
-   static boolean frontWebStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
-      if (!PvpBotMod.FRONT_WEB.on()) {
-         return false;
-      }
-
+   /** low health with the target right on top of the bot: 3-5 webs on the ground in front of it, then it eats while the target is caught. */
+   static boolean startCloseWebs(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
       int now = PvpBotMod.globalTick;
-      if (now - f.wsSampleTick >= 5) {
-         f.wsClosing = now - f.wsSampleTick <= 12 && f.wsSampleDist - dist > 0.4;
-         f.wsSampleDist = dist;
-         f.wsSampleTick = now;
-      }
-
-      double d = PvpBotMod.FRONT_WEB_DIST.value;
-      if (!f.wsClosing
-         || dist > d + 1.0
-         || dist < d - 2.5
-         || now < f.nextFrontWebTick
-         || !bot.isOnGround()
-         || BotSupport.inCobweb(bot)
-         || BotSupport.countItem(bot, Items.COBWEB) < 2) {
-         return false;
-      }
-
-      f.nextFrontWebTick = now + Math.max(20, (int)(PvpBotMod.FRONT_WEB_COOLDOWN.value * 20.0));
-      if (!chance(PvpBotMod.FRONT_WEB_CHANCE.value)) {
+      if (now < f.nextCloseWeb || BotSupport.countItem(bot, Items.COBWEB) < 2 || BotSupport.inCobweb(bot)) {
          return false;
       }
 
       World level = BotSupport.sw(bot);
       double dx = target.getX() - bot.getX();
       double dz = target.getZ() - bot.getZ();
-      if (dx * dx + dz * dz < 0.01) {
-         return false;
-      }
-
-      double base = Math.atan2(dz, dx);
-      int n = 2 + ThreadLocalRandom.current().nextInt(3);
+      double td = Math.sqrt(dx * dx + dz * dz);
+      double base = td < 0.05 ? Math.toRadians(bot.getYaw() + 90.0) : Math.atan2(dz, dx);
+      double rmax = Math.max(1.0, Math.min(2.4, td - 0.7));
+      int n = 3 + ThreadLocalRandom.current().nextInt(3);
       int floorY = bot.getBlockPos().getY();
       java.util.List<BlockPos> cells = new java.util.ArrayList<>();
-      for (int tries = 0; tries < 30 && cells.size() < n; tries++) {
+      for (int tries = 0; tries < 40 && cells.size() < n; tries++) {
          double ang = base + Math.toRadians((ThreadLocalRandom.current().nextDouble() * 2.0 - 1.0) * 40.0);
-         double r = 1.5 + ThreadLocalRandom.current().nextDouble() * 2.0;
+         double r = 0.9 + ThreadLocalRandom.current().nextDouble() * (rmax - 0.9);
          BlockPos c = BlockPos.ofFloored(bot.getX() + Math.cos(ang) * r, floorY, bot.getZ() + Math.sin(ang) * r);
          if (!cells.contains(c) && !c.equals(bot.getBlockPos()) && level.getBlockState(c).isAir() && !level.getBlockState(c.down()).isAir()) {
             cells.add(c);
          }
       }
 
-      if (cells.isEmpty() || !startWebSeq(server, name, f, bot, cells, 0)) {
+      if (cells.isEmpty()) {
          return false;
       }
 
-      flog(f, "front webs: " + cells.size() + " cobwebs, target closing in at " + String.format(Locale.ROOT, "%.1f", dist));
+      f.nextCloseWeb = now + 100;
+      if (!startWebSeq(server, name, f, bot, cells, 2)) {
+         return false;
+      }
+
+      flog(f, "target too close to cocoon: " + cells.size() + " webs in front, then eating");
+      return true;
+   }
+
+   /** knocked 5-8 blocks away: eat one golden apple (still looking at the target) and go back to fighting. */
+   static boolean knockEatStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist, double hpNow) {
+      int now = PvpBotMod.globalTick;
+      if (!PvpBotMod.KNOCK_EAT.on() || now < f.nextKnockEat) {
+         return false;
+      }
+
+      double lo = Math.min(PvpBotMod.KNOCK_EAT_MIN.value, PvpBotMod.KNOCK_EAT_MAX.value);
+      double hi = Math.max(PvpBotMod.KNOCK_EAT_MIN.value, PvpBotMod.KNOCK_EAT_MAX.value);
+      if (dist < lo
+         || dist > hi
+         || now - Math.max(f.lastHurtTick, f.pressHurtTick) > 25
+         || hpNow >= mirrorBound(bot)
+         || now < f.nextEatTick
+         || gappleIndex(bot) < 0
+         || healUnsafe(f, bot, target)
+         || BotSupport.inCobweb(bot)
+         || targetHealing(target)) {
+         return false;
+      }
+
+      f.nextKnockEat = now + 200;
+      if (!chance(PvpBotMod.KNOCK_EAT_CHANCE.value)) {
+         return false;
+      }
+
+      startEat(server, name, f, bot, true);
+      if (f.phase != PvpBotMod.Phase.EAT) {
+         return false;
+      }
+
+      f.knockEat = true;
+      f.eaten = 0;
+      flog(f, "knocked away (" + String.format(Locale.ROOT, "%.1f", dist) + " blocks): eating one golden apple while watching the target");
       return true;
    }
 
@@ -14875,6 +14954,12 @@ final class Fighting {
       if (after == 1) {
          f.pressureFleeDist = PvpBotMod.HEAL_PRESSURE_BACK.value;
          startFlee(server, name, f, 0);
+      } else if (after == 2) {
+         if (BotSupport.findFoodIndex(bot) >= 0) {
+            startEat(server, name, f, bot, true);
+         } else {
+            f.reset();
+         }
       } else {
          f.reset();
       }
@@ -14933,6 +15018,47 @@ final class Fighting {
       f.bsNextRoll = PvpBotMod.globalTick + Math.max(20, (int)(PvpBotMod.BACKSTAB_COOLDOWN.value * 20.0));
    }
 
+   /** where the bot is heading during a BackStab: the landing spot, or a waypoint beside the target while it is still in front of it. */
+   static Vec3d bsAimPoint(ServerPlayerEntity bot, ServerPlayerEntity target, PvpBotMod.Fight f) {
+      Vec3d d = backStabPoint(target, f.bsMode, f.bsSign);
+      if (f.bsMode == 0) {
+         double yaw = Math.toRadians(target.getYaw());
+         double rel = (bot.getX() - target.getX()) * -Math.sin(yaw) + (bot.getZ() - target.getZ()) * Math.cos(yaw);
+         if (rel > -0.2) {
+            return new Vec3d(target.getX() + Math.cos(yaw) * f.bsSign * 1.6, target.getY(), target.getZ() + Math.sin(yaw) * f.bsSign * 1.6);
+         }
+      }
+
+      return d;
+   }
+
+   /** presses the movement keys that take the bot toward the point while its aim stays on the target. */
+   static void bsKeys(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, Vec3d aim) {
+      double yaw = Math.toRadians(bot.getYaw());
+      double vx = aim.x - bot.getX();
+      double vz = aim.z - bot.getZ();
+      double fwd = vx * -Math.sin(yaw) + vz * Math.cos(yaw);
+      double lft = vx * Math.cos(yaw) + vz * Math.sin(yaw);
+      int fa = fwd > 0.25 ? 1 : fwd < -0.25 ? -1 : 0;
+      int sa = lft > 0.25 ? 1 : lft < -0.25 ? -1 : 0;
+      if (fa != f.bsKeyF || sa != f.bsKeyS) {
+         f.bsKeyF = fa;
+         f.bsKeyS = sa;
+         BotSupport.run(server, "player " + name + " move");
+         if (fa > 0) {
+            BotSupport.run(server, "player " + name + " move forward");
+         } else if (fa < 0) {
+            BotSupport.run(server, "player " + name + " move backward");
+         }
+
+         if (sa > 0) {
+            BotSupport.run(server, "player " + name + " move left");
+         } else if (sa < 0) {
+            BotSupport.run(server, "player " + name + " move right");
+         }
+      }
+   }
+
    /** the spot behind (mode 0) or beside (mode 1, sign = side) the target, 1.3 blocks from it. */
    static Vec3d backStabPoint(ServerPlayerEntity target, int mode, int sign) {
       double yaw = Math.toRadians(target.getYaw());
@@ -14971,8 +15097,10 @@ final class Fighting {
             f.bsSign = o[1];
             f.bsClose = false;
             f.bsAir = false;
-            BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(d.x) + " " + BotSupport.fmt(bot.getEyeY()) + " " + BotSupport.fmt(d.z));
-            BotSupport.run(server, "player " + name + " move forward");
+            BotSupport.run(server, "player " + name + " look upon " + target.getName().getString() + " eyes");
+            f.bsKeyF = 9;
+            f.bsKeyS = 9;
+            bsKeys(server, name, f, bot, bsAimPoint(bot, target, f));
             BotSupport.run(server, "player " + name + " sprint");
             BotSupport.run(server, "player " + name + " jump once");
             clearFightFlags(f);
@@ -15021,20 +15149,9 @@ final class Fighting {
          BotSupport.run(server, "player " + name + " move");
       }
 
+      BotSupport.run(server, "player " + name + " look upon " + target.getName().getString() + " eyes");
       if (!f.bsClose) {
-         Vec3d aim = d;
-         if (f.bsMode == 0) {
-            // still in front of the target: swing round its side first instead of running into it
-            double yaw = Math.toRadians(target.getYaw());
-            double rel = (bot.getX() - target.getX()) * -Math.sin(yaw) + (bot.getZ() - target.getZ()) * Math.cos(yaw);
-            if (rel > -0.2) {
-               aim = new Vec3d(target.getX() + Math.cos(yaw) * f.bsSign * 1.6, target.getY(), target.getZ() + Math.sin(yaw) * f.bsSign * 1.6);
-            }
-         }
-
-         BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(aim.x) + " " + BotSupport.fmt(bot.getEyeY()) + " " + BotSupport.fmt(aim.z));
-      } else {
-         BotSupport.run(server, "player " + name + " look upon " + target.getName().getString() + " eyes");
+         bsKeys(server, name, f, bot, bsAimPoint(bot, target, f));
       }
 
       boolean ready = bot.getAttackCooldownProgress(0.5F) >= 1.0F;
@@ -15057,6 +15174,12 @@ final class Fighting {
    }
 
    static boolean startCocoon(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot) {
+      ServerPlayerEntity closeTarget = PvpBotMod.COCOON_MIN_DIST.value > 0.0 && f.target != null ? server.getPlayerManager().getPlayer(f.target) : null;
+      if (closeTarget != null && bot.distanceTo(closeTarget) < PvpBotMod.COCOON_MIN_DIST.value) {
+         // the target is on top of the bot: no cocoon, web the ground in front of it and eat while the target gets caught
+         return startCloseWebs(server, name, f, bot, closeTarget);
+      }
+
       int idx = BotSupport.findItemIndex(bot, Items.COBWEB);
       int slot = idx < 0 ? -1 : BotSupport.toHotbar(bot, idx, BotSupport.findWeaponSlot(bot));
       if (slot >= 0 && BotSupport.cocoonGroundOk(bot)) {
@@ -15636,8 +15759,9 @@ final class Gui {
       cat("Opening", "opening", "openingdist", "openwait", "openwebchance", "openwebcount");
       cat("Human", "flickturns", "tracklag", "surprisechance", "surprisedelaymin", "surprisedelaymax", "panichearts", "panichopchance", "confidence", "confidencestrength", "aimvary", "aimvarymin", "aimvarymax", "aimvarychance", "aimvaryseconds");
       cat("Eating", "mirrorheal", "mirrorfightdist", "healpressure", "healpressureweb", "healpressureback");
-      cat("Opening", "frontweb", "frontwebchance", "frontwebdist", "frontwebcooldown");
-      cat("Combat", "backstab", "backstabchance", "backstabmin", "backstabmax", "backstabside", "backstabcooldown", "reachtrim", "critcircle", "closeaim", "critguard", "critguardhits", "critguardmin", "critguardmax");
+      cat("Sword Tech", "jrhit", "jrhitchance", "jrhitlate");
+      cat("Eating", "knockeat", "knockeatchance", "knockeatmin", "knockeatmax", "cocoonmindist");
+      cat("Combat", "keepvarychance", "keepvarymin", "backstab", "backstabchance", "backstabmin", "backstabmax", "backstabside", "backstabcooldown", "reachtrim", "critcircle", "closeaim", "critguard", "critguardhits", "critguardmin", "critguardmax");
       cat("Restock", "restock", "restockdist", "restockbelow", "restockdurability", "restockcooldown", "restockwebs");
       cat("Ranged", "rangedchance", "rangedmin", "rangedmax", "rangedcooldown");
       cat("Sword Tech", "jumpresetwindow", "jumpresetrange", "lowfightchance", "prep", "prepgapples", "prepdist", "prepaxe", "baitchance", "baitticks", "baitcooldown", "pearlaggro", "pearlaggromin", "pearlaggrocd", "pearlaggrohearts");
@@ -16788,6 +16912,8 @@ final class Tiers {
       ex(m, PvpBotMod.PUNISH_CRIT_CHANCE, 10, 85, q);
       ex(m, PvpBotMod.RECOVERY_CHANCE, 10, 90, q);
       ex(m, PvpBotMod.CRIT_CHAIN_CHANCE, 10, 70, q);
+      ex(m, PvpBotMod.JR_HIT_CHANCE, 25, 95, q);
+      ex(m, PvpBotMod.JR_HIT_LATE, 5, 0, q);
       ex(m, PvpBotMod.WEBESCAPE_DELAY_MIN, 8, 1, q);
       ex(m, PvpBotMod.WEBESCAPE_DELAY_MAX, 20, 3, q);
       return m;
@@ -16795,7 +16921,7 @@ final class Tiers {
 
    /** options where a LOWER number is the better skill (so when two tiers set one, the lower value wins). */
    static final java.util.Set<PvpBotMod.Opt> INVERSE = new java.util.HashSet<>(Arrays.asList(
-      PvpBotMod.AIM, PvpBotMod.AIM_VARY_MAX, PvpBotMod.REACT_MIN, PvpBotMod.REACT_MAX, PvpBotMod.AIM_SPREAD, PvpBotMod.WOBBLE, PvpBotMod.MISS_CHANCE, PvpBotMod.OVERSHOOT_CHANCE,
+      PvpBotMod.AIM, PvpBotMod.AIM_VARY_MAX, PvpBotMod.JR_HIT_LATE, PvpBotMod.REACT_MIN, PvpBotMod.REACT_MAX, PvpBotMod.AIM_SPREAD, PvpBotMod.WOBBLE, PvpBotMod.MISS_CHANCE, PvpBotMod.OVERSHOOT_CHANCE,
       PvpBotMod.FLINCH_CHANCE, PvpBotMod.MACE_AIM_ERROR, PvpBotMod.MACE_MISTAKE, PvpBotMod.WIND_JUMP_LATE_CHANCE, PvpBotMod.WINDMACE_COOLDOWN,
       PvpBotMod.WINDMACE_HEARTS, PvpBotMod.MACE_CHAIN_GAP, PvpBotMod.WEBESCAPE_DELAY_MIN, PvpBotMod.WEBESCAPE_DELAY_MAX
    ));
