@@ -185,6 +185,10 @@ public class PvpBotMod implements ModInitializer {
       "findrange", "find_range", 24.0, 4.0, 128.0, false, "blocks within which auto-target and focus fire look for a target"
    );
    static final PvpBotMod.Opt CRIT_CIRCLE = opt("critcircle", "crit_circle", 1.0, 0.0, 1.0, true, "target in a cobweb or eating/drinking: the bot circles it up close and crit-jumps every swing");
+   static final PvpBotMod.Opt WEB_HOP = opt("webhop", "web_hop", 1.0, 0.0, 1.0, true, "a web in the path of a bot sprint-jumping at its target: the bot places one block under its feet (pillar hop) to get a block higher and jump over it; a big stack of webs is strafed around instead");
+   static final PvpBotMod.Opt WEB_HOP_DIST = opt("webhopdist", "web_hop_dist", 5.0, 2.0, 7.0, false, "blocks: the web hop / sidestep starts when the web in the path is this close");
+   static final PvpBotMod.Opt WEB_HOP_MOM = opt("webhopmom", "web_hop_mom", 1.0, 0.0, 1.0, true, "momentum web hop: the bot keeps forward + sprint held, places the block where its jump will land and keeps running (off = stop and pillar)");
+   static final PvpBotMod.Opt REACH_CENTER = opt("reachcenter", "reach_center", 3.2, 2.0, 4.5, false, "blocks: hard cap on eye-to-target-centre distance for every melee hit (a vanilla 3.0 box reach is about 3.4 centre distance, lower this to make bots hit shorter)");
    static final PvpBotMod.Opt COMBO = opt("combostrafe", "combo_strafe", 1.0, 0.0, 1.0, true, "combo style: the bot strafes and lands several knockback (sprint) hits in a row, then crits; it only keeps its distance during this combo part");
    static final PvpBotMod.Opt COMBO_CHANCE = opt("combochance", "combo_chance", 70.0, 0.0, 100.0, false, "percent chance each cycle is a combo (otherwise the bot stays on top of the target and goes for crits)");
    static final PvpBotMod.Opt COMBO_HITS = opt("combohits", "combo_hits", 6.0, 1.0, 12.0, false, "knockback hits in a combo before the bot crits again");
@@ -2827,6 +2831,16 @@ public class PvpBotMod implements ModInitializer {
       double placeR = 1.5;
       boolean bsJumped;
       int bsJumpTick;
+      int whStage;
+      int whStart;
+      int whCycle;
+      int nextWebHop;
+      double whBase;
+      double whLastX;
+      double whLastY;
+      double whLastZ;
+      double whSx;
+      double whSz;
       boolean bsAir;
       int critGuardLast = -1000;
 
@@ -3164,6 +3178,7 @@ public class PvpBotMod implements ModInitializer {
       RELOAD,
       WEBSEQ,
       BACKSTAB,
+      WEBHOP,
       WALLDEF;
    }
 
@@ -3776,6 +3791,13 @@ final class BotSupport {
    /** true when a ray from the bot's eye along its real look direction hits the target's box within max blocks. */
    static boolean rayReach(ServerPlayerEntity bot, ServerPlayerEntity target, double max) {
       Box bb = target.getBoundingBox();
+      double ccx = (bb.minX + bb.maxX) / 2.0 - bot.getX();
+      double ccy = (bb.minY + bb.maxY) / 2.0 - bot.getEyeY();
+      double ccz = (bb.minZ + bb.maxZ) / 2.0 - bot.getZ();
+      if (Math.sqrt(ccx * ccx + ccy * ccy + ccz * ccz) > PvpBotMod.REACH_CENTER.value + Math.max(0.0, max - meleeReach())) {
+         return false;
+      }
+
       double yaw = Math.toRadians(bot.getYaw());
       double pitch = Math.toRadians(bot.getPitch());
       double dx = -Math.sin(yaw) * Math.cos(pitch);
@@ -6888,6 +6910,9 @@ final class Fighting {
                   case BACKSTAB:
                      backStabPhase(server, name, f, bot, target, dist);
                      break;
+                  case WEBHOP:
+                     webHopPhase(server, name, f, bot, target, dist);
+                     break;
                   default:
                      break;
                }
@@ -7150,6 +7175,7 @@ final class Fighting {
          || !f.bsActive && baitStep(server, name, f, bot, target, dist)
          || predWebStep(server, name, f, bot, target, dist)
          || knockEatStep(server, name, f, bot, target, dist, hpNow)
+         || webHopStep(server, name, f, bot, target, dist)
          || mendStep(server, name, f, bot, target, dist)) {
          return;
       }
@@ -15107,6 +15133,261 @@ final class Fighting {
       }
    }
 
+   /** web in the path of a bot that runs at its target: {nearest web distance on the path, webs in the corridor, 1 if a web is stacked on another, webs on the bot's left, webs on its right}, or null. */
+   static double[] webScan(ServerPlayerEntity bot, ServerPlayerEntity target) {
+      World level = BotSupport.sw(bot);
+      double dx = target.getX() - bot.getX();
+      double dz = target.getZ() - bot.getZ();
+      double len = Math.sqrt(dx * dx + dz * dz);
+      if (len < 2.0) {
+         return null;
+      }
+
+      double ux = dx / len;
+      double uz = dz / len;
+      double lx = -uz;
+      double lz = ux;
+      int y = bot.getBlockPos().getY();
+      double nearest = 99.0;
+      int count = 0;
+      int left = 0;
+      int right = 0;
+      boolean tall = false;
+      java.util.Set<BlockPos> seen = new java.util.HashSet<>();
+      for (double d = 0.8; d <= 3.4; d += 0.5) {
+         for (int lat = -1; lat <= 1; lat++) {
+            double px = bot.getX() + ux * d + lx * lat * 0.9;
+            double pz = bot.getZ() + uz * d + lz * lat * 0.9;
+            for (int dy = 0; dy <= 1; dy++) {
+               BlockPos c = BlockPos.ofFloored(px, y + dy, pz);
+               if (level.getBlockState(c).isOf(Blocks.COBWEB) && seen.add(c.toImmutable())) {
+                  count++;
+                  if (lat == 0) {
+                     nearest = Math.min(nearest, d);
+                  } else if (lat < 0) {
+                     left++;
+                  } else {
+                     right++;
+                  }
+
+                  if (level.getBlockState(dy == 0 ? c.up() : c.down()).isOf(Blocks.COBWEB)) {
+                     tall = true;
+                  }
+               }
+            }
+         }
+      }
+
+      return nearest > 90.0 ? null : new double[]{nearest, count, tall ? 1.0 : 0.0, left, right};
+   }
+
+   /** a web in the way of a sprint-jumping bot: one web = pillar hop over it, a big stack = strafe round it. */
+   static boolean webHopStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int now = PvpBotMod.globalTick;
+      if (!PvpBotMod.WEB_HOP.on() || now < f.nextWebHop || dist < 3.5 || !bot.isOnGround() || BotSupport.inCobweb(bot) || !(f.hopping || bot.isSprinting())) {
+         return false;
+      }
+
+      double[] w = webScan(bot, target);
+      if (w == null || w[0] > PvpBotMod.WEB_HOP_DIST.value || w[0] < 1.4) {
+         return false;
+      }
+
+      f.nextWebHop = now + 30;
+      if (w[2] > 0.5 || w[1] >= 3.0) {
+         // too much web to hop: sidestep toward the side with fewer webs
+         f.strafeDir = w[3] <= w[4] ? 1 : -1;
+         BotSupport.run(server, "player " + name + " move " + (f.strafeDir > 0 ? "left" : "right"));
+         axisCmd(server, name, f);
+         f.sidestepUntil = now + 14;
+         f.nextStrafeTick = now + 16;
+         flog(f, "web stack ahead (" + (int)w[1] + " webs): strafing round it");
+         return false;
+      }
+
+      int bidx = findPillarBlock(bot);
+      int slot = bidx < 0 ? -1 : BotSupport.toHotbar(bot, bidx, BotSupport.findWeaponSlot(bot));
+      if (slot < 0) {
+         return false;
+      }
+
+      boolean mom = PvpBotMod.WEB_HOP_MOM.on() && w[0] >= 3.4;
+      if (mom) {
+         // keep forward + sprint held and sprint-jump: the block goes where the jump will land
+         BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+         BotSupport.run(server, "player " + name + " move forward");
+         BotSupport.run(server, "player " + name + " sprint");
+         BotSupport.run(server, "player " + name + " jump once");
+         clearFightFlags(f);
+         f.phase = PvpBotMod.Phase.WEBHOP;
+         f.whStage = 11;
+         f.whStart = now;
+         f.whCycle = now;
+         f.whBase = bot.getY();
+         f.whLastX = bot.getX();
+         f.whLastY = bot.getY();
+         f.whLastZ = bot.getZ();
+         f.whSx = bot.getX();
+         f.whSz = bot.getZ();
+         flog(f, "web " + String.format(Locale.ROOT, "%.1f", w[0]) + " blocks ahead: momentum hop (block under the landing spot)");
+         return true;
+      }
+
+      BotSupport.run(server, "player " + name + " move");
+      BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+      clearFightFlags(f);
+      f.phase = PvpBotMod.Phase.WEBHOP;
+      f.whStage = 1;
+      f.whStart = now;
+      f.whCycle = now;
+      flog(f, "web " + String.format(Locale.ROOT, "%.1f", w[0]) + " blocks ahead: pillar hop to get a block higher");
+      return true;
+   }
+
+   static void endWebHop(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot) {
+      f.weaponSlot = -1;
+      f.phase = PvpBotMod.Phase.FIGHT;
+      f.keepMode = 1;
+      f.started = false;
+      f.hopping = false;
+      f.nextWebHop = PvpBotMod.globalTick + 40;
+      BotSupport.run(server, "player " + name + " move forward");
+      BotSupport.run(server, "player " + name + " sprint");
+      if (bot.isOnGround()) {
+         BotSupport.run(server, "player " + name + " jump once");
+      }
+   }
+
+   static void webHopPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int now = PvpBotMod.globalTick;
+      if (now - f.whStart > 40 || !target.isAlive() || BotSupport.inCobweb(bot)) {
+         endWebHop(server, name, f, bot);
+         return;
+      }
+
+      if (f.whStage >= 11) {
+         momentumHopPhase(server, name, f, bot, target);
+         return;
+      }
+
+      if (f.whStage == 1) {
+         if (bot.isOnGround()) {
+            BotSupport.run(server, "player " + name + " look " + String.format(Locale.ROOT, "%.1f", BotSupport.directYaw(bot, target)) + " 90");
+            f.whBase = bot.getY();
+            BotSupport.run(server, "player " + name + " jump once");
+            f.whStage = 2;
+            f.whCycle = now;
+         } else if (now - f.whCycle > 12) {
+            endWebHop(server, name, f, bot);
+         }
+      } else if (f.whStage == 2) {
+         if (bot.getY() >= f.whBase + 1.05) {
+            BotSupport.useOnce(server, name, f);
+            f.whStage = 3;
+            f.whCycle = now;
+         } else if (now - f.whCycle > 12) {
+            endWebHop(server, name, f, bot);
+         }
+      } else if (bot.isOnGround() && bot.getY() >= f.whBase + 0.9) {
+         // standing one block higher: sprint-jump on over the web
+         endWebHop(server, name, f, bot);
+      } else if (now - f.whCycle > 14) {
+         endWebHop(server, name, f, bot);
+      }
+   }
+
+   /** momentum hop: at the top of the sprint-jump, predict where the jump lands one block up, place a block there, land on it and keep running. */
+   static void momentumHopPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
+      int now = PvpBotMod.globalTick;
+      double y = bot.getY();
+      double dy = y - f.whLastY;
+      double hx = bot.getX() - f.whLastX;
+      double hz = bot.getZ() - f.whLastZ;
+      f.whLastX = bot.getX();
+      f.whLastY = y;
+      f.whLastZ = bot.getZ();
+      if (f.whStage == 11) {
+         if (now <= f.whStart + 1) {
+            return;
+         }
+
+         if (bot.isOnGround() || now - f.whStart > 24) {
+            endWebHop(server, name, f, bot);
+            return;
+         }
+
+         if (y < f.whBase + 0.9 || dy > 0.10) {
+            return;
+         }
+
+         double hs = Math.sqrt(hx * hx + hz * hz);
+         if (hs < 0.08) {
+            endWebHop(server, name, f, bot);
+            return;
+         }
+
+         double ux = hx / hs;
+         double uz = hz / hs;
+         double px = bot.getX();
+         double py = y;
+         double pz = bot.getZ();
+         double vy = dy;
+         double v = hs;
+         boolean found = false;
+         for (int i = 0; i < 14; i++) {
+            vy = (vy - 0.08) * 0.98;
+            py += vy;
+            v = v * 0.91 + 0.026;
+            px += ux * v;
+            pz += uz * v;
+            if (py <= f.whBase + 1.0) {
+               found = true;
+               break;
+            }
+         }
+
+         World level = BotSupport.sw(bot);
+         BlockPos cell = BlockPos.ofFloored(px, f.whBase + 0.01, pz);
+         BlockPos sup = cell.down();
+         double reachEye = Math.sqrt(Math.pow(cell.getX() + 0.5 - bot.getX(), 2) + Math.pow(cell.getY() - bot.getEyeY(), 2) + Math.pow(cell.getZ() + 0.5 - bot.getZ(), 2));
+         double along = Math.sqrt(Math.pow(px - f.whSx, 2) + Math.pow(pz - f.whSz, 2));
+         double[] w = webScan(bot, target);
+         boolean webOk = !level.getBlockState(cell).isOf(Blocks.COBWEB);
+         if (w != null) {
+            // w[0] was measured from the bot now (mid-air), so the landing cell must still be short of the web
+            double travelled = Math.sqrt(Math.pow(bot.getX() - f.whSx, 2) + Math.pow(bot.getZ() - f.whSz, 2));
+            webOk = along + 0.4 < travelled + w[0] && !level.getBlockState(cell).isOf(Blocks.COBWEB);
+         }
+
+         boolean ok = found && webOk && reachEye <= 4.4
+            && level.getBlockState(cell).isAir()
+            && !level.getBlockState(sup).getCollisionShape(level, sup).isEmpty()
+            && level.getBlockState(cell.up()).getCollisionShape(level, cell.up()).isEmpty()
+            && level.getBlockState(cell.up(2)).getCollisionShape(level, cell.up(2)).isEmpty();
+         if (!ok) {
+            flog(f, "momentum hop: no valid landing cell, running on");
+            endWebHop(server, name, f, bot);
+            return;
+         }
+
+         BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(cell.getX() + 0.5) + " " + BotSupport.fmt(cell.getY()) + " " + BotSupport.fmt(cell.getZ() + 0.5));
+         BotSupport.useOnce(server, name, f);
+         f.whStage = 12;
+         f.whCycle = now;
+      } else if (f.whStage == 12) {
+         // eyes back on the target while still in the air
+         BotSupport.run(server, BotSupport.lookCmd(name, target.getName().getString()));
+         f.whStage = 13;
+      } else {
+         if (bot.isOnGround()) {
+            // on the new block (or the ground if the block failed): relaunch at once with the keys still held
+            endWebHop(server, name, f, bot);
+         } else if (now - f.whCycle > 20) {
+            endWebHop(server, name, f, bot);
+         }
+      }
+   }
+
    /** combo style: rolls 6 knockback hits (strafing) before the next crit. */
    static void comboStep(PvpBotMod.Fight f, ServerPlayerEntity target) {
       int now = PvpBotMod.globalTick;
@@ -15910,6 +16191,7 @@ final class Gui {
       cat("Eating", "mirrorheal", "mirrorfightdist", "healpressure", "healpressureweb", "healpressureback");
       cat("Sword Tech", "jrhit", "jrhitchance", "jrhitlate");
       cat("Eating", "knockeat", "knockeatchance", "knockeatmin", "knockeatmax", "cocoonmindist");
+      cat("Combat", "webhop", "webhopdist", "webhopmom", "reachcenter");
       cat("Combat", "combostrafe", "combochance", "combohits", "firstkbchance", "hitwebpattern", "keepvarychance", "keepvarymin", "backstab", "backstabchance", "backstabmin", "backstabmax", "backstabside", "backstabcooldown", "reachtrim", "critcircle", "closeaim", "critguard", "critguardhits", "critguardmin", "critguardmax");
       cat("Restock", "restock", "restockdist", "restockbelow", "restockdurability", "restockcooldown", "restockwebs");
       cat("Ranged", "rangedchance", "rangedmin", "rangedmax", "rangedcooldown");
@@ -17108,6 +17390,7 @@ final class Tiers {
                ex(m, PvpBotMod.AIM_VARY_MIN, 0, 0, t);
                ex(m, PvpBotMod.REACT_MIN, 1, 0, t);
                ex(m, PvpBotMod.REACT_MAX, 2, 1, t);
+               ex(m, PvpBotMod.BACKSTAB_CHANCE, 90, 90, t);
             }
             break;
          case "smp":
