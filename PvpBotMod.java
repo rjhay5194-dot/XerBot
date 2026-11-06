@@ -187,6 +187,12 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt CRIT_CIRCLE = opt("critcircle", "crit_circle", 1.0, 0.0, 1.0, true, "target in a cobweb or eating/drinking: the bot circles it up close and crit-jumps every swing");
    static final PvpBotMod.Opt WEB_HOP = opt("webhop", "web_hop", 1.0, 0.0, 1.0, true, "a web in the path of a bot sprint-jumping at its target: the bot places one block under its feet (pillar hop) to get a block higher and jump over it; a big stack of webs is strafed around instead");
    static final PvpBotMod.Opt WEB_HOP_DIST = opt("webhopdist", "web_hop_dist", 5.0, 2.0, 7.0, false, "blocks: the web hop / sidestep starts when the web in the path is this close");
+   static final PvpBotMod.Opt REACH_VARY = opt("reachvary", "reach_vary", 0.6, 0.0, 1.5, false, "blocks: each hit rolls a random reach loss up to this, so bots rarely hit from the very edge of their reach");
+   static final PvpBotMod.Opt REACH_LAG = opt("reachlag", "reach_lag", 4.0, 0.0, 10.0, false, "ticks of lag allowance: reach shrinks by the speed the target is moving away times this (after a knockback hit the target is flying away, the bot cannot reach it)");
+   static final PvpBotMod.Opt LAST_SHOT = opt("lastshot", "last_shot", 1.0, 0.0, 1.0, true, "before the bot runs off or stops to heal, it fires a loaded crossbow (or a bow) at a nearly dead target as its last attack");
+   static final PvpBotMod.Opt LAST_SHOT_HP = opt("lastshothp", "last_shot_hp", 9.0, 1.0, 20.0, false, "health points (2 = 1 heart): the last shot before healing is only taken when the target has this much health or less");
+   static final PvpBotMod.Opt HEAD_WEB_BREAK = opt("headwebbreak", "head_web_break", 1.0, 0.0, 1.0, true, "a bot stuck in a web at head level breaks it with its weapon instead of trying water (water cannot clear it)");
+   static final PvpBotMod.Opt WEB_EXPECT_SHIELD = opt("webexpectshield", "web_expect_shield", 50.0, 0.0, 100.0, false, "percent chance a bot breaking a web expects an attack and keeps its shield up while the target is within 10 blocks");
    static final PvpBotMod.Opt WEB_HOP_MOM = opt("webhopmom", "web_hop_mom", 1.0, 0.0, 1.0, true, "momentum web hop: the bot keeps forward + sprint held, places the block where its jump will land and keeps running (off = stop and pillar)");
    static final PvpBotMod.Opt REACH_CENTER = opt("reachcenter", "reach_center", 3.2, 2.0, 4.5, false, "blocks: hard cap on eye-to-target-centre distance for every melee hit (a vanilla 3.0 box reach is about 3.4 centre distance, lower this to make bots hit shorter)");
    static final PvpBotMod.Opt COMBO = opt("combostrafe", "combo_strafe", 1.0, 0.0, 1.0, true, "combo style: the bot strafes and lands several knockback (sprint) hits in a row, then crits; it only keeps its distance during this combo part");
@@ -488,41 +494,41 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt SHIELD_CHANCE = opt(
       "shield",
       "shield_chance",
-      45.0,
+      75.0,
       0.0,
       100.0,
       false,
       "percent chance to raise a shield when the target is about to swing and in range (needs a shield in the inventory)"
    );
    static final PvpBotMod.Opt SHIELD_RANGE = opt(
-      "shieldrange", "shield_range", 1.5, 0.5, 6.0, false, "blocks within which the bot will consider raising a shield (it does not shield right after it hits)"
+      "shieldrange", "shield_range", 2.5, 0.5, 6.0, false, "blocks within which the bot will consider raising a shield (it does not shield right after it hits)"
    );
    static final PvpBotMod.Opt SHIELD_TICKS = opt(
       "shieldticks",
       "shield_ticks",
-      10.0,
+      14.0,
       2.0,
       100.0,
       false,
       "shortest a shield hold lasts (a shield needs about 5 ticks to start blocking, so keep this well above that)"
    );
    static final PvpBotMod.Opt SHIELD_TICKS_MAX = opt(
-      "shieldticksmax", "shield_ticks_max", 50.0, 2.0, 150.0, false, "longest a shield hold lasts; each hold is randomized between shieldticks and this"
+      "shieldticksmax", "shield_ticks_max", 70.0, 2.0, 150.0, false, "longest a shield hold lasts; each hold is randomized between shieldticks and this"
    );
    static final PvpBotMod.Opt POSTSWING_SHIELD_CHANCE = opt(
       "postswingshield",
       "postswing_shield_chance",
-      80.0,
+      90.0,
       0.0,
       100.0,
       false,
       "percent chance the bot raises its shield right after landing a hit "
    );
    static final PvpBotMod.Opt POSTSWING_SHIELD_TICKS_MIN = opt(
-      "postswingshieldticksmin", "postswing_shield_ticks_min", 8.0, 2.0, 100.0, false, "shortest a post-swing shield hold lasts"
+      "postswingshieldticksmin", "postswing_shield_ticks_min", 12.0, 2.0, 100.0, false, "shortest a post-swing shield hold lasts"
    );
    static final PvpBotMod.Opt POSTSWING_SHIELD_TICKS_MAX = opt(
-      "postswingshieldticksmax", "postswing_shield_ticks_max", 13.0, 2.0, 150.0, false, "longest a post-swing shield hold lasts"
+      "postswingshieldticksmax", "postswing_shield_ticks_max", 22.0, 2.0, 150.0, false, "longest a post-swing shield hold lasts"
    );
    static final PvpBotMod.Opt STUN_CHANCE = opt(
       "stun", "shield_stun_chance", 35.0, 0.0, 100.0, false, "percent chance to swap to an axe when the target raises a shield, to disable it"
@@ -618,7 +624,7 @@ public class PvpBotMod implements ModInitializer {
       "spearswapchance", "spear_swap_chance", 40.0, 0.0, 100.0, false, "percent chance to use the spear swap when the target is out of normal reach"
    );
    static final PvpBotMod.Opt SPEAR_REACH = opt(
-      "spearreach", "spear_reach", 4.5, 3.0, 7.0, false, "blocks of reach the spear swap can hit from"
+      "spearreach", "spear_reach", 3.0, 3.0, 7.0, false, "blocks of reach the spear swap can hit from"
    );
    static final PvpBotMod.Opt PATHFIND = opt(
       "pathfind", "pathfind", 1.0, 0.0, 1.0, true, "bots use A* pathfinding when blocked, stuck, or the target is at a different height"
@@ -2458,6 +2464,9 @@ public class PvpBotMod implements ModInitializer {
       int mirrorSwingTick = -100;
       float lastSwingProg;
       int rangedStage;
+      boolean lastShot;
+      int nextLastShot;
+      boolean webExpect;
       int rangedStart;
       int rangedKind;
       int rangedNext;
@@ -3789,12 +3798,39 @@ final class BotSupport {
    }
 
    /** true when a ray from the bot's eye along its real look direction hits the target's box within max blocks. */
+   static final java.util.Map<java.util.UUID, double[]> REACH_STATE = new java.util.HashMap<>();
+
+   /** blocks taken off the reach right now: a random per-hit roll plus the speed the target is moving away times the lag allowance. */
+   static double reachShrink(ServerPlayerEntity bot, ServerPlayerEntity target) {
+      int now = PvpBotMod.globalTick;
+      double[] st = REACH_STATE.computeIfAbsent(bot.getUuid(), k -> new double[]{-100, 0, 0, -100, 0});
+      double d = Math.hypot(target.getX() - bot.getX(), target.getZ() - bot.getZ());
+      if (now != (int)st[3]) {
+         st[4] = now - (int)st[3] == 1 ? Math.max(0.0, d - st[2]) : 0.0;
+         st[2] = d;
+         st[3] = now;
+      }
+
+      if (now - (int)st[0] >= 6) {
+         st[0] = now;
+         st[1] = ThreadLocalRandom.current().nextDouble() * PvpBotMod.REACH_VARY.value;
+      }
+
+      return st[1] + Math.min(1.0, st[4] * PvpBotMod.REACH_LAG.value);
+   }
+
    static boolean rayReach(ServerPlayerEntity bot, ServerPlayerEntity target, double max) {
+      double shr = 0.0;
+      if (max <= meleeReach() + 0.3) {
+         shr = reachShrink(bot, target);
+         max = Math.max(1.0, max - shr);
+      }
+
       Box bb = target.getBoundingBox();
       double ccx = (bb.minX + bb.maxX) / 2.0 - bot.getX();
       double ccy = (bb.minY + bb.maxY) / 2.0 - bot.getEyeY();
       double ccz = (bb.minZ + bb.maxZ) / 2.0 - bot.getZ();
-      if (Math.sqrt(ccx * ccx + ccy * ccy + ccz * ccz) > PvpBotMod.REACH_CENTER.value + Math.max(0.0, max - meleeReach())) {
+      if (Math.sqrt(ccx * ccx + ccy * ccy + ccz * ccz) > PvpBotMod.REACH_CENTER.value - shr + Math.max(0.0, max - meleeReach())) {
          return false;
       }
 
@@ -3849,6 +3885,21 @@ final class BotSupport {
       double dy = Math.max(Math.max(box.minY - ey, 0.0), ey - box.maxY);
       double dz = Math.max(Math.max(box.minZ - ez, 0.0), ez - box.maxZ);
       return Math.sqrt(dx * dx + dy * dy + dz * dz);
+   }
+
+   /** a cobweb in the cell at eye level inside the entity's box, or null. */
+   static BlockPos headLevelWeb(LivingEntity who) {
+      Box box = who.getBoundingBox();
+      int hy = BlockPos.ofFloored(who.getX(), who.getEyeY(), who.getZ()).getY();
+      BlockPos min = BlockPos.ofFloored(box.minX + 1.0E-7, hy, box.minZ + 1.0E-7);
+      BlockPos max = BlockPos.ofFloored(box.maxX - 1.0E-7, hy, box.maxZ - 1.0E-7);
+      for (BlockPos p : BlockPos.iterate(min, max)) {
+         if (who.getEntityWorld().getBlockState(p).isOf(Blocks.COBWEB)) {
+            return p.toImmutable();
+         }
+      }
+
+      return null;
    }
 
    static BlockPos findCobweb(LivingEntity who) {
@@ -4271,9 +4322,14 @@ final class BotSupport {
                // the target is in reach: the normal fight logic hits it through the web, the escape waits
                return false;
             } else {
-               int idx = PvpBotMod.WEB_ESCAPE.on() ? findItemIndex(bot, Items.WATER_BUCKET) : -1;
+               BlockPos headWeb = PvpBotMod.HEAD_WEB_BREAK.on() ? headLevelWeb(bot) : null;
+               if (headWeb != null) {
+                  web = headWeb;
+               }
+
+               int idx = headWeb == null && PvpBotMod.WEB_ESCAPE.on() ? findItemIndex(bot, Items.WATER_BUCKET) : -1;
                int slot = idx < 0 ? -1 : toHotbar(bot, idx, findWeaponSlot(bot));
-               if (slot < 0 && !PvpBotMod.WEB_BREAK.on()) {
+               if (slot < 0 && !PvpBotMod.WEB_BREAK.on() && headWeb == null) {
                   Fighting.flog(f, "in a web but no water bucket and webbreak is off");
                   f.nextWebTick = PvpBotMod.globalTick + 100;
                   return false;
@@ -4312,6 +4368,7 @@ final class BotSupport {
                      run(server, aim);
                      run(server, "player " + name + " attack continuous");
                      f.webStage = 10;
+                     f.webExpect = chance(PvpBotMod.WEB_EXPECT_SHIELD.value);
                   }
 
                   Fighting.flog(f, "web escape start: " + (slot >= 0 ? "water bucket" : "breaking it (stage 10)") + " web=" + web.getX() + " " + web.getY() + " " + web.getZ());
@@ -4371,6 +4428,17 @@ final class BotSupport {
                // and only goes back to breaking the web when the target is away.
                double reach = reachDistance(bot, target);
                boolean threat = reach <= BotSupport.meleeReach() + 2.5;
+               if (f.webExpect && !threat && reach <= 10.0 && bot.getEquippedStack(EquipmentSlot.OFFHAND).isOf(Items.SHIELD)) {
+                  // expects the target to come at it: shield up while the web is cut
+                  if (!f.blocking) {
+                     run(server, "player " + name + " use continuous");
+                     f.blocking = true;
+                     f.threatHold = false;
+                  }
+
+                  f.blockUntil = PvpBotMod.globalTick + 10;
+               }
+
                if (threat) {
                   if (!f.webFighting) {
                      run(server, "player " + name + " stop");
@@ -7158,6 +7226,7 @@ final class Fighting {
       comboStep(f, target);
       if (cartDefenseStep(server, name, f, bot, target, dist)
          || wallDefStep(server, name, f, bot, target, dist)
+         || lastShotStep(server, name, f, bot, target, dist, hpNow)
          || restockStep(server, name, f, bot, target, dist)
          || reloadStep(server, name, f, bot, target, dist)
          || openingStep(server, name, f, bot, target, dist)
@@ -8985,6 +9054,7 @@ final class Fighting {
          return false;
       }
 
+      f.lastShot = false;
       f.rangedNext = PvpBotMod.globalTick + 20;
       if (!chance(PvpBotMod.RANGED_CHANCE.value)) {
          return false;
@@ -9007,10 +9077,69 @@ final class Fighting {
       return true;
    }
 
+   /** before the bot heals: one last shot at a nearly dead target with a loaded crossbow (instant) or a bow. */
+   static boolean lastShotStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist, double hpNow) {
+      int now = PvpBotMod.globalTick;
+      if (!PvpBotMod.LAST_SHOT.on() || now < f.nextLastShot || f.phase != PvpBotMod.Phase.FIGHT) {
+         return false;
+      }
+
+      if (BotSupport.inCobweb(bot) || f.pathActive || f.blocking || target.isBlocking() || !bot.canSee(target) || dist > 40.0) {
+         return false;
+      }
+
+      double tHp = target.getHealth() + target.getAbsorptionAmount();
+      if (tHp > PvpBotMod.LAST_SHOT_HP.value) {
+         return false;
+      }
+
+      double eatAt = BotSupport.eatThresholdHearts(f);
+      boolean heal = eatAt > 0.0 && hpNow <= eatAt * 2.0 && now >= f.nextEatTick && BotSupport.findFoodIndex(bot) >= 0;
+      if (!heal && PvpBotMod.POTIONS.on() && now >= f.nextPotionTick && BotSupport.wantedPotion(bot, f, dist, hpNow) != 0) {
+         heal = true;
+      }
+
+      if (!heal) {
+         return false;
+      }
+
+      int slot = -1;
+      int kind = 1;
+      int cx = findChargedCrossbow(bot);
+      if (cx >= 0) {
+         slot = BotSupport.toHotbar(bot, cx, BotSupport.findWeaponSlot(bot));
+      } else if (dist >= 2.5 && BotSupport.findItemIndex(bot, Items.ARROW) >= 0) {
+         int bi = BotSupport.findItemIndex(bot, Items.BOW);
+         if (bi >= 0) {
+            slot = BotSupport.toHotbar(bot, bi, BotSupport.findWeaponSlot(bot));
+            kind = 0;
+         }
+      }
+
+      f.nextLastShot = now + 400;
+      if (slot < 0) {
+         return false;
+      }
+
+      BotSupport.run(server, "player " + name + " stop");
+      BotSupport.run(server, "player " + name + " unsprint");
+      clearFightFlags(f);
+      BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+      f.weaponSlot = -1;
+      f.phase = PvpBotMod.Phase.RANGED;
+      f.rangedKind = kind;
+      f.lastShot = true;
+      f.rangedStage = kind == 1 ? 2 : 0;
+      f.rangedStart = now;
+      flog(f, "last shot before healing: " + (kind == 1 ? "crossbow" : "bow") + " at a target with " + String.format(Locale.ROOT, "%.1f", tHp) + " health");
+      return true;
+   }
+
    static void endRanged(MinecraftServer server, String name, PvpBotMod.Fight f) {
       BotSupport.run(server, "player " + name + " use");
       BotSupport.run(server, "player " + name + " stop");
       f.reset();
+      f.lastShot = false;
       f.rangedNext = PvpBotMod.globalTick + PvpBotMod.RANGED_COOLDOWN.asInt();
       f.weaponSlot = -1;
       f.reloadAfterShot = PvpBotMod.globalTick + 100;
@@ -9030,7 +9159,7 @@ final class Fighting {
    static void rangedPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
       int elapsed = PvpBotMod.globalTick - f.rangedStart;
       Item held = f.rangedKind == 0 ? Items.BOW : f.rangedKind == 1 ? Items.CROSSBOW : Items.TRIDENT;
-      if (elapsed > 90 || dist < PvpBotMod.RANGED_MIN.value - 3.0 || BotSupport.inCobweb(bot) || !bot.canSee(target)) {
+      if (elapsed > 90 || dist < PvpBotMod.RANGED_MIN.value - 3.0 && !f.lastShot || BotSupport.inCobweb(bot) || !bot.canSee(target)) {
          endRanged(server, name, f);
          return;
       }
@@ -16191,7 +16320,7 @@ final class Gui {
       cat("Eating", "mirrorheal", "mirrorfightdist", "healpressure", "healpressureweb", "healpressureback");
       cat("Sword Tech", "jrhit", "jrhitchance", "jrhitlate");
       cat("Eating", "knockeat", "knockeatchance", "knockeatmin", "knockeatmax", "cocoonmindist");
-      cat("Combat", "webhop", "webhopdist", "webhopmom", "reachcenter");
+      cat("Combat", "webhop", "webhopdist", "webhopmom", "reachcenter", "reachvary", "reachlag", "lastshot", "lastshothp", "headwebbreak", "webexpectshield");
       cat("Combat", "combostrafe", "combochance", "combohits", "firstkbchance", "hitwebpattern", "keepvarychance", "keepvarymin", "backstab", "backstabchance", "backstabmin", "backstabmax", "backstabside", "backstabcooldown", "reachtrim", "critcircle", "closeaim", "critguard", "critguardhits", "critguardmin", "critguardmax");
       cat("Restock", "restock", "restockdist", "restockbelow", "restockdurability", "restockcooldown", "restockwebs");
       cat("Ranged", "rangedchance", "rangedmin", "rangedmax", "rangedcooldown");
