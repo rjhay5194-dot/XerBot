@@ -4368,7 +4368,7 @@ final class BotSupport {
                      run(server, aim);
                      run(server, "player " + name + " attack continuous");
                      f.webStage = 10;
-                     f.webExpect = chance(PvpBotMod.WEB_EXPECT_SHIELD.value);
+                     f.webExpect = ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.WEB_EXPECT_SHIELD.value;
                   }
 
                   Fighting.flog(f, "web escape start: " + (slot >= 0 ? "water bucket" : "breaking it (stage 10)") + " web=" + web.getX() + " " + web.getY() + " " + web.getZ());
