@@ -193,6 +193,9 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt LAST_SHOT_HP = opt("lastshothp", "last_shot_hp", 9.0, 1.0, 20.0, false, "health points (2 = 1 heart): the last shot before healing is only taken when the target has this much health or less");
    static final PvpBotMod.Opt HEAD_WEB_BREAK = opt("headwebbreak", "head_web_break", 1.0, 0.0, 1.0, true, "a bot stuck in a web at head level breaks it with its weapon instead of trying water (water cannot clear it)");
    static final PvpBotMod.Opt WEB_EXPECT_SHIELD = opt("webexpectshield", "web_expect_shield", 50.0, 0.0, 100.0, false, "percent chance a bot breaking a web expects an attack and keeps its shield up while the target is within 10 blocks");
+   static final PvpBotMod.Opt SPEED_NOJUMP = opt("speednojump", "speed_no_jump", 1.0, 0.0, 1.0, true, "with Speed II or higher the bot does not jump or crit, except right after landing a run of hits in a row");
+   static final PvpBotMod.Opt SPEED_HITS_MIN = opt("speedhitsmin", "speed_hits_min", 2.0, 1.0, 10.0, false, "fewest hits in a row (without being hit) before a Speed II bot jumps for a crit");
+   static final PvpBotMod.Opt SPEED_HITS_MAX = opt("speedhitsmax", "speed_hits_max", 4.0, 1.0, 10.0, false, "most hits in a row before a Speed II bot jumps for a crit");
    static final PvpBotMod.Opt WEB_HOP_MOM = opt("webhopmom", "web_hop_mom", 1.0, 0.0, 1.0, true, "momentum web hop: the bot keeps forward + sprint held, places the block where its jump will land and keeps running (off = stop and pillar)");
    static final PvpBotMod.Opt REACH_CENTER = opt("reachcenter", "reach_center", 3.2, 2.0, 4.5, false, "blocks: hard cap on eye-to-target-centre distance for every melee hit (a vanilla 3.0 box reach is about 3.4 centre distance, lower this to make bots hit shorter)");
    static final PvpBotMod.Opt COMBO = opt("combostrafe", "combo_strafe", 1.0, 0.0, 1.0, true, "combo style: the bot strafes and lands several knockback (sprint) hits in a row, then crits; it only keeps its distance during this combo part");
@@ -2465,6 +2468,10 @@ public class PvpBotMod implements ModInitializer {
       float lastSwingProg;
       int rangedStage;
       boolean lastShot;
+      boolean eatHunger;
+      int landStreak;
+      int landGoal = -1;
+      int lastHealPotion = -1000;
       int nextLastShot;
       boolean webExpect;
       int rangedStart;
@@ -2945,6 +2952,7 @@ public class PvpBotMod implements ModInitializer {
          this.critChainUntil = 0;
          this.hitsStreak = 0;
          this.hitsThreshold = -1;
+         this.eatHunger = false;
          this.webtrapStage = 0;
          this.windStage = 0;
          this.windLoop = false;
@@ -3223,25 +3231,71 @@ final class BotSupport {
          || stack.isOf(Items.CHICKEN);
    }
 
+   /** healing food: golden apples only. Plain (cooked) food is never used to heal, only to fill the hunger bar. */
    static int findFoodIndex(ServerPlayerEntity bot) {
-      boolean goldenOnly = bot.getHungerManager().getFoodLevel() >= 20;
       PlayerInventory inv = bot.getInventory();
-      int any = -1;
-
       for (int i = 0; i < 36; i++) {
          ItemStack stack = inv.getStack(i);
-         if (!stack.isEmpty() && stack.contains(DataComponentTypes.FOOD) && !badFood(stack)) {
-            if (stack.isOf(Items.GOLDEN_APPLE) || stack.isOf(Items.ENCHANTED_GOLDEN_APPLE)) {
-               return i;
-            }
-
-            if (!goldenOnly && any < 0) {
-               any = i;
-            }
+         if (!stack.isEmpty() && stack.contains(DataComponentTypes.FOOD) && (stack.isOf(Items.GOLDEN_APPLE) || stack.isOf(Items.ENCHANTED_GOLDEN_APPLE))) {
+            return i;
          }
       }
 
-      return any;
+      return -1;
+   }
+
+   /** plain food whose hunger points fit into what the bot has lost (the biggest one that fits), or -1. Golden apples never count. */
+   static int findHungerFoodIndex(ServerPlayerEntity bot) {
+      int lost = 20 - bot.getHungerManager().getFoodLevel();
+      if (lost <= 0) {
+         return -1;
+      }
+
+      PlayerInventory inv = bot.getInventory();
+      int best = -1;
+      int bestN = 0;
+      for (int i = 0; i < 36; i++) {
+         ItemStack stack = inv.getStack(i);
+         if (stack.isEmpty() || !stack.contains(DataComponentTypes.FOOD) || badFood(stack)
+            || stack.isOf(Items.GOLDEN_APPLE) || stack.isOf(Items.ENCHANTED_GOLDEN_APPLE)) {
+            continue;
+         }
+
+         int n = ((net.minecraft.component.type.FoodComponent)stack.get(DataComponentTypes.FOOD)).nutrition();
+         if (n <= lost && n > bestN) {
+            best = i;
+            bestN = n;
+         }
+      }
+
+      return best;
+   }
+
+   /** true while a Speed II (or higher) bot must not jump or crit: it needs a run of landed hits first. */
+   static boolean speedNoJump(ServerPlayerEntity bot, PvpBotMod.Fight f) {
+      if (!PvpBotMod.SPEED_NOJUMP.on() || bot == null || f == null) {
+         return false;
+      }
+
+      boolean fast = false;
+      for (StatusEffectInstance e : bot.getStatusEffects()) {
+         if (effectKind(e) == 2 && e.getAmplifier() >= 1) {
+            fast = true;
+            break;
+         }
+      }
+
+      if (!fast) {
+         return false;
+      }
+
+      if (f.landGoal < 0) {
+         int lo = Math.min(PvpBotMod.SPEED_HITS_MIN.asInt(), PvpBotMod.SPEED_HITS_MAX.asInt());
+         int hi = Math.max(PvpBotMod.SPEED_HITS_MIN.asInt(), PvpBotMod.SPEED_HITS_MAX.asInt());
+         f.landGoal = lo + ThreadLocalRandom.current().nextInt(hi - lo + 1);
+      }
+
+      return f.landStreak < f.landGoal;
    }
 
    static int weaponScore(ItemStack stack) {
@@ -7196,6 +7250,8 @@ final class Fighting {
       if (botHurtBy == target && botHurtStampNow != f.botHurtStamp) {
          f.botHurtStamp = botHurtStampNow;
          f.hitsStreak++;
+         f.landStreak = 0;
+         f.landGoal = -1;
          f.confidence = Math.max(-1.0, f.confidence - 0.10);
       }
 
@@ -7249,7 +7305,9 @@ final class Fighting {
          return;
       }
 
-      int potionWanted = PvpBotMod.POTIONS.on() && PvpBotMod.globalTick >= f.nextPotionTick && !healUnsafe(f, bot, target) && !BotSupport.inCobweb(bot) ? BotSupport.wantedPotion(bot, f, dist, hpNow) : 0;
+      boolean guaranteeHeal = PvpBotMod.POTIONS.on() && PvpBotMod.POTION_HEARTS.value > 0.0 && hpNow <= PvpBotMod.POTION_HEARTS.value * 2.0
+         && (f.thrownMask & 1) == 0 && PvpBotMod.globalTick - f.lastHealPotion >= 15 && BotSupport.findPotionIndex(bot, 1) >= 0;
+      int potionWanted = guaranteeHeal ? 1 : PvpBotMod.POTIONS.on() && PvpBotMod.globalTick >= f.nextPotionTick && !healUnsafe(f, bot, target) && !BotSupport.inCobweb(bot) ? BotSupport.wantedPotion(bot, f, dist, hpNow) : 0;
       if (potionWanted != 0) {
          startPotionRun(server, name, f, dist, potionWanted, hpNow);
       } else if (healUnsafe(f, bot, target) || !BotSupport.cocoonReady(bot, f, hpNow) || !startCocoon(server, name, f, bot)) {
@@ -7261,7 +7319,7 @@ final class Fighting {
             || BotSupport.countItem(bot, Items.COBWEB) < Math.max(2, PvpBotMod.WEBTRAP_COUNT.asInt())
             || !(ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.WEBTRAP_CHANCE.value)
             || !startWebTrap(server, name, f, bot, target)) {
-            boolean hungry = PvpBotMod.HUNGER_EAT_LEVEL.value > 0.0 && bot.getHungerManager().getFoodLevel() <= PvpBotMod.HUNGER_EAT_LEVEL.asInt();
+            boolean hungry = PvpBotMod.HUNGER_EAT_LEVEL.value > 0.0 && bot.getHungerManager().getFoodLevel() <= PvpBotMod.HUNGER_EAT_LEVEL.asInt() && BotSupport.findHungerFoodIndex(bot) >= 0;
             double eatAt = BotSupport.eatThresholdHearts(f);
             boolean lowHealth = eatAt > 0.0 && hpNow <= eatAt * 2.0;
             if (!lowHealth) {
@@ -7280,7 +7338,8 @@ final class Fighting {
                }
             }
 
-            if (!(lowHealth && (f.lowFightOn || PvpBotMod.globalTick < f.finishUntil)) && (lowHealth || hungry) && PvpBotMod.globalTick >= f.nextEatTick && BotSupport.findFoodIndex(bot) >= 0) {
+            if (!(lowHealth && (f.lowFightOn || PvpBotMod.globalTick < f.finishUntil)) && (lowHealth && BotSupport.findFoodIndex(bot) >= 0 || hungry) && PvpBotMod.globalTick >= f.nextEatTick) {
+               f.eatHunger = !(lowHealth && BotSupport.findFoodIndex(bot) >= 0);
                if (BotSupport.inCobweb(bot) && !f.inCocoon) {
                   // stuck in a web: a wind charge or pearl can free it, otherwise heal where it stands
                   if (!startItemEscape(server, name, f, bot, target)) {
@@ -7307,7 +7366,7 @@ final class Fighting {
 
                   boolean archer = PvpBotMod.ARCHER_RUSH.on()
                      && (target.getMainHandStack().isOf(Items.BOW) || target.getMainHandStack().isOf(Items.CROSSBOW));
-                  if (vulnerable && PvpBotMod.FALL_CRIT.on() && bot.isOnGround() && !f.hopping && !f.crit && dist <= PvpBotMod.JUMP_RANGE.value && (circleOn || !critSuppressed(f))) {
+                  if (vulnerable && PvpBotMod.FALL_CRIT.on() && !BotSupport.speedNoJump(bot, f) && bot.isOnGround() && !f.hopping && !f.crit && dist <= PvpBotMod.JUMP_RANGE.value && (circleOn || !critSuppressed(f))) {
                      BotSupport.run(server, "player " + name + " jump once");
                   }
 
@@ -7440,7 +7499,7 @@ final class Fighting {
                               BotSupport.run(server, "player " + name + " jump");
                               f.hopping = false;
                            }
-                        } else if (PvpBotMod.BUNNY_HOP.on() && !f.crit && dist > PvpBotMod.HOP_STOP.value + 1.0) {
+                        } else if (PvpBotMod.BUNNY_HOP.on() && !f.crit && !BotSupport.speedNoJump(bot, f) && dist > PvpBotMod.HOP_STOP.value + 1.0) {
                            BotSupport.run(server, "player " + name + " jump continuous");
                            f.hopping = true;
                            if (f.keepMode != 1) {
@@ -7527,6 +7586,7 @@ final class Fighting {
                         }
 
                         if (PvpBotMod.JUMP_CHANCE.value > 0.0
+                           && !BotSupport.speedNoJump(bot, f)
                            && f.comboLeft <= 0
                            && !f.hopping
                            && !f.crit
@@ -7551,6 +7611,13 @@ final class Fighting {
                         f.confidence = Math.min(1.0, f.confidence + 0.12);
                         f.critGuardCount = 0;
                         f.lastLanded = PvpBotMod.globalTick;
+                        if (f.landGoal >= 0 && f.landStreak >= f.landGoal) {
+                           f.landStreak = 0;
+                           f.landGoal = -1;
+                        } else {
+                           f.landStreak++;
+                        }
+
                         if (f.comboLeft > 0) {
                            f.comboLeft--;
                            if (f.circleDir != 0 && chance(50.0)) {
@@ -7697,6 +7764,10 @@ final class Fighting {
                                  }
 
                                  if (tryCrit && !circleOn && critSuppressed(f)) {
+                                    tryCrit = false;
+                                 }
+
+                                 if (tryCrit && BotSupport.speedNoJump(bot, f)) {
                                     tryCrit = false;
                                  }
 
@@ -14757,7 +14828,7 @@ final class Fighting {
       BotSupport.run(server, "player " + name + " unsneak");
       BotSupport.run(server, "player " + name + " stop");
       f.hopping = false;
-      int idx = BotSupport.findFoodIndex(bot);
+      int idx = f.eatHunger ? BotSupport.findHungerFoodIndex(bot) : BotSupport.findFoodIndex(bot);
       int slot = idx < 0 ? -1 : BotSupport.toHotbar(bot, idx, BotSupport.findWeaponSlot(bot));
       if (slot < 0) {
          endRetreat(server, name, f);
@@ -14872,7 +14943,7 @@ final class Fighting {
             return;
          }
 
-         if ((f.eaten < PvpBotMod.EAT_COUNT.asInt() || !healthy) && BotSupport.findFoodIndex(bot) >= 0) {
+         if (f.eatHunger ? f.eaten < PvpBotMod.EAT_COUNT.asInt() && BotSupport.findHungerFoodIndex(bot) >= 0 : (f.eaten < PvpBotMod.EAT_COUNT.asInt() || !healthy) && BotSupport.findFoodIndex(bot) >= 0) {
             startEat(server, name, f, bot, f.inCocoon);
          } else {
             endRetreat(server, name, f);
@@ -15224,7 +15295,7 @@ final class Fighting {
    // ---------------------------------------------------------------------
 
    static void backStabStep(PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist, double hpNow) {
-      if (!PvpBotMod.BACKSTAB.on()) {
+      if (!PvpBotMod.BACKSTAB.on() || BotSupport.speedNoJump(bot, f)) {
          f.bsActive = false;
          f.bsLeft = 0;
          return;
@@ -15870,7 +15941,7 @@ final class Fighting {
    static void startPotionRun(MinecraftServer server, String name, PvpBotMod.Fight f, double dist, int kind, double hp) {
       f.thrownMask = 0;
       f.healsRemaining = kind == 1 && PvpBotMod.POTION_HEARTS2.value > 0.0 && hp <= PvpBotMod.POTION_HEARTS2.value * 2.0 ? 2 : 0;
-      boolean closeHeal = kind == 1 && dist <= 2.0;
+      boolean closeHeal = kind == 1;
       if (!(dist >= fleeDist(f)) && !closeHeal) {
          startFlee(server, name, f, 1);
       } else {
@@ -15899,7 +15970,7 @@ final class Fighting {
       if (f.potionStage == 0) {
          double hp = bot.getHealth() + bot.getAbsorptionAmount();
          int kind = f.healsRemaining > 0 && BotSupport.findPotionIndex(bot, 1) >= 0 ? 1 : BotSupport.wantedPotion(bot, f, dist, hp);
-         boolean closeHeal = kind == 1 && dist <= 2.0;
+         boolean closeHeal = kind == 1;
          if (dist < 5.0 && !closeHeal) {
             f.nextPotionTick = PvpBotMod.globalTick + PvpBotMod.POTION_DELAY.asInt();
             endRetreat(server, name, f);
@@ -15937,6 +16008,10 @@ final class Fighting {
       } else if (f.potionStage == 1) {
          if (PvpBotMod.globalTick - f.potionStart >= 1) {
             BotSupport.useOnce(server, name, f);
+            if (f.potionKind == 1) {
+               f.lastHealPotion = PvpBotMod.globalTick;
+            }
+
             if (f.potionKind == 1 && f.healsRemaining > 0) {
                f.healsRemaining--;
             } else {
@@ -16320,7 +16395,7 @@ final class Gui {
       cat("Eating", "mirrorheal", "mirrorfightdist", "healpressure", "healpressureweb", "healpressureback");
       cat("Sword Tech", "jrhit", "jrhitchance", "jrhitlate");
       cat("Eating", "knockeat", "knockeatchance", "knockeatmin", "knockeatmax", "cocoonmindist");
-      cat("Combat", "webhop", "webhopdist", "webhopmom", "reachcenter", "reachvary", "reachlag", "lastshot", "lastshothp", "headwebbreak", "webexpectshield");
+      cat("Combat", "webhop", "webhopdist", "webhopmom", "reachcenter", "reachvary", "reachlag", "lastshot", "lastshothp", "headwebbreak", "webexpectshield", "speednojump", "speedhitsmin", "speedhitsmax");
       cat("Combat", "combostrafe", "combochance", "combohits", "firstkbchance", "hitwebpattern", "keepvarychance", "keepvarymin", "backstab", "backstabchance", "backstabmin", "backstabmax", "backstabside", "backstabcooldown", "reachtrim", "critcircle", "closeaim", "critguard", "critguardhits", "critguardmin", "critguardmax");
       cat("Restock", "restock", "restockdist", "restockbelow", "restockdurability", "restockcooldown", "restockwebs");
       cat("Ranged", "rangedchance", "rangedmin", "rangedmax", "rangedcooldown");
