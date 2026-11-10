@@ -464,6 +464,16 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt WALL_DEF = opt("walldef", "wall_defense", 1.0, 0.0, 1.0, true, "when the target is 4 to 8 blocks away holding a TNT minecart / crossbow, or has placed a cart, the bot builds a 3x2 wall in front of itself to block the blast (logs are crafted into planks)");
    static final PvpBotMod.Opt WALL_DEF_CHANCE = opt("walldefchance", "wall_defense_chance", 75.0, 0.0, 100.0, false, "percent chance the bot builds the wall when the target looks like it is going to cart");
 
+   static final PvpBotMod.Opt CHASE_HOP = opt("chasehop", "chase_hop", 1.0, 0.0, 1.0, true, "while chasing a far target the bot places one block mid-jump, lands on it and keeps its momentum");
+   static final PvpBotMod.Opt CHASE_HOP_DIST = opt("chasehopdist", "chase_hop_dist", 10.0, 4.0, 40.0, false, "blocks: chase hop only starts when the target is farther than this");
+   static final PvpBotMod.Opt CHASE_HOP_CHANCE = opt("chasehopchance", "chase_hop_chance", 70.0, 0.0, 100.0, false, "percent chance each time the cooldown ends");
+   static final PvpBotMod.Opt CHASE_HOP_COOLDOWN = opt("chasehopcooldown", "chase_hop_cooldown", 30.0, 10.0, 200.0, false, "ticks between chase hops");
+   static final PvpBotMod.Opt HEAL_BUILD = opt("healbuild", "heal_build", 1.0, 0.0, 1.0, true, "before healing the bot may build a block shelter around itself (open at the back) and eat inside it");
+   static final PvpBotMod.Opt HEAL_BUILD_CHANCE = opt("healbuildchance", "heal_build_chance", 30.0, 0.0, 100.0, false, "percent chance a heal starts with building");
+   static final PvpBotMod.Opt HEAL_BUILD_FULL = opt("healbuildfull", "heal_build_full", 40.0, 0.0, 100.0, false, "percent of builds that are the full 2-layer U (feet + head layer on 5 sides) instead of the low wall + shelf");
+   static final PvpBotMod.Opt HEAL_BUILD_MAX = opt("healbuildmax", "heal_build_max", 10.0, 3.0, 10.0, false, "most blocks one shelter may use");
+   static final PvpBotMod.Opt REPAIR_SECONDS = opt("repairseconds", "repair_seconds", 120.0, 5.0, 600.0, false, "default seconds back that /pvpbot repair undoes");
+
    static final PvpBotMod.Opt CART_FINISH_HP = opt(
       "cartfinishhp", "cart_finish_hp", 8.0, 2.0, 20.0, false, "target health (half hearts) at or under which the cart finisher is very likely (vexbot doctrine)"
    );
@@ -1258,6 +1268,11 @@ public class PvpBotMod implements ModInitializer {
          register(d);
       });
       ServerTickEvents.END_SERVER_TICK.register(BotSupport::tick);
+      net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, be) -> {
+         if (world instanceof net.minecraft.server.world.ServerWorld sw && be == null) {
+            BotSupport.logBreak(sw, pos, state);
+         }
+      });
       ServerLifecycleEvents.SERVER_STARTED.register(server -> {
          Kits.load(server);
          try {
@@ -1272,6 +1287,7 @@ public class PvpBotMod implements ModInitializer {
                BlockPos pos = hit.getBlockPos().offset(hit.getSide());
                PENDING_CHESTS.add(new PendingChest((net.minecraft.server.world.ServerWorld)world, pos, globalTick + 2));
             }
+            BotSupport.trackHeldItem((net.minecraft.server.world.ServerWorld)world, held, hit.getBlockPos().offset(hit.getSide()));
          }
 
          return net.minecraft.util.ActionResult.PASS;
@@ -1554,6 +1570,11 @@ public class PvpBotMod implements ModInitializer {
                   )
             )
       );
+      root.then(
+         CommandManager.literal("repair")
+            .executes(ctx -> repairCmd(ctx, REPAIR_SECONDS.asInt()))
+            .then(CommandManager.argument("seconds", IntegerArgumentType.integer(5, 3600)).executes(ctx -> repairCmd(ctx, IntegerArgumentType.getInteger(ctx, "seconds"))))
+      );
       root.then(Arena.node());
       root.then(
          ((LiteralArgumentBuilder)CommandManager.literal("difficulty").executes(PvpBotMod::showDifficulty))
@@ -1595,6 +1616,12 @@ public class PvpBotMod implements ModInitializer {
       }
 
       d.register(root);
+   }
+
+   static int repairCmd(CommandContext<ServerCommandSource> ctx, int seconds) {
+      int n = BotSupport.repairBlocks(((ServerCommandSource)ctx.getSource()).getServer(), seconds);
+      ((ServerCommandSource)ctx.getSource()).sendFeedback(() -> Text.literal("Repaired " + n + " block(s) from the last " + seconds + " seconds."), true);
+      return n;
    }
 
    static int lootGive(CommandContext<ServerCommandSource> ctx, int amount) throws CommandSyntaxException {
@@ -1921,6 +1948,7 @@ public class PvpBotMod implements ModInitializer {
          "/pvpbot tiers opens the tier menu: a tier LT5..HT1 per bot for Sword, SMP, Mace, ElytraMace and Axe (/pvpbot tier <bot> <sword|smp|mace|elytra|axe> <tier>, /pvpbot tiers random [min] [max]). The items a bot carries decide which tiers apply; several can apply at once. SMP = shield + cobwebs + splash potions. Skills come only from the tiers: Sword = aim, spacing, crits and hit-and-back-away; Axe = axe stuns and shield; SMP = webs, escapes, pearls and healing; Mace = smashes, wind charges and stun slams.",
          "Elytra + fireworks: /pvpbot elytraescapechance, elytrachasechance, elytraboosts, elytratakeoff (needs an elytra and firework rockets in the bot's inventory). Mace fear range: /pvpbot macefeardist.",
          "Lava on web: /pvpbot lavaweb, lavawebchance, lavawebticks, lavawebrepeats, lavawebside, lavawebback (needs a lava bucket in the bot's inventory). Web escape delay: /pvpbot webescapedelaymin and webescapedelaymax.",
+         "/pvpbot repair [seconds] undoes blocks (planks, webs, water, lava) placed in the last N seconds and restores broken ones.",
          "Every setting is /pvpbot <setting> [value]. Run /pvpbot options to see them all, or /pvpbot gui for a menu."
       };
 
@@ -2860,6 +2888,11 @@ public class PvpBotMod implements ModInitializer {
       boolean bsAir;
       int critGuardLast = -1000;
 
+      int nextChaseHop, nextHealBuild, hbStage, hbStart, hbIdx, hbNext, hbPlaced, hbSlot, fortNext;
+      boolean fortEat;
+      final java.util.List<BlockPos> hbCells = new java.util.ArrayList<>();
+      final java.util.List<BlockPos> fortCells = new java.util.ArrayList<>();
+
       void clearHealFlags() {
          this.pressureRolled = false;
          this.knockEat = false;
@@ -2869,6 +2902,7 @@ public class PvpBotMod implements ModInitializer {
          this.pressHurtTick = -1000;
          this.mirrorEat = false;
          this.mirrorFight = 0;
+         this.fortEat = false;
       }
       int testMode;
       int testExpire;
@@ -2999,6 +3033,7 @@ public class PvpBotMod implements ModInitializer {
          this.pathLastZ = Double.NaN;
          this.wcStage = 0;
          this.pillarStage = 0;
+         this.hbStage = 0;
       }
    }
 
@@ -3195,8 +3230,9 @@ public class PvpBotMod implements ModInitializer {
       RELOAD,
       WEBSEQ,
       BACKSTAB,
-      WEBHOP,
-      WALLDEF;
+            WEBHOP,
+      WALLDEF,
+      HEALBUILD;
    }
 
    static final class PlacedWeb {
@@ -3213,6 +3249,117 @@ public class PvpBotMod implements ModInitializer {
 }
 
 final class BotSupport {
+   static final class BlockRec {
+      final net.minecraft.server.world.ServerWorld world;
+      final BlockPos pos;
+      final int tick;
+      final net.minecraft.block.Block block;
+      final BlockState restore;
+
+      BlockRec(net.minecraft.server.world.ServerWorld w, BlockPos p, int t, net.minecraft.block.Block b, BlockState r) {
+         world = w;
+         pos = p;
+         tick = t;
+         block = b;
+         restore = r;
+      }
+   }
+
+   static final ArrayList<BlockRec> BLOCK_LOG = new ArrayList<>();
+   static final ArrayList<BlockRec> BLOCK_TRACK = new ArrayList<>();
+
+   static void trackHeld(ServerPlayerEntity b) {
+      net.minecraft.util.hit.HitResult hr = b.raycast(5.0, 0.0F, false);
+      if (hr instanceof net.minecraft.util.hit.BlockHitResult bh && hr.getType() == net.minecraft.util.hit.HitResult.Type.BLOCK) {
+         trackHeldItem(sw(b), b.getMainHandStack(), bh.getBlockPos().offset(bh.getSide()));
+      }
+   }
+
+   static void trackHeldItem(net.minecraft.server.world.ServerWorld w, ItemStack st, BlockPos pos) {
+      boolean ok = st.isOf(Items.WATER_BUCKET) || st.isOf(Items.LAVA_BUCKET)
+         || st.getItem() instanceof net.minecraft.item.BlockItem bi && !(bi.getBlock() instanceof net.minecraft.block.ShulkerBoxBlock);
+      if (!ok || BLOCK_TRACK.size() > 500) {
+         return;
+      }
+
+      BlockState s = w.getBlockState(pos);
+      if (s.isAir() || s.isReplaceable()) {
+         BLOCK_TRACK.add(new BlockRec(w, pos.toImmutable(), PvpBotMod.globalTick + 2, null, null));
+      }
+   }
+
+   static void logBreak(net.minecraft.server.world.ServerWorld w, BlockPos pos, BlockState state) {
+      if (state.isAir() || state.getBlock() instanceof net.minecraft.block.FluidBlock) {
+         return;
+      }
+
+      for (int i = BLOCK_LOG.size() - 1; i >= 0 && i > BLOCK_LOG.size() - 400; i--) {
+         BlockRec r = BLOCK_LOG.get(i);
+         if (r.restore == null && r.world == w && r.pos.equals(pos)) {
+            BLOCK_LOG.remove(i); // a placed block was broken again: nothing to restore
+            return;
+         }
+      }
+
+      BLOCK_LOG.add(new BlockRec(w, pos.toImmutable(), PvpBotMod.globalTick, state.getBlock(), state));
+   }
+
+   static void blockLogTick() {
+      int now = PvpBotMod.globalTick;
+      Iterator<BlockRec> it = BLOCK_TRACK.iterator();
+      while (it.hasNext()) {
+         BlockRec r = it.next();
+         if (now < r.tick) {
+            continue;
+         }
+
+         it.remove();
+         BlockState s = r.world.getBlockState(r.pos);
+         if (!s.isAir()) {
+            BLOCK_LOG.add(new BlockRec(r.world, r.pos, now, s.getBlock(), null));
+         }
+      }
+
+      while (BLOCK_LOG.size() > 4000) {
+         BLOCK_LOG.remove(0);
+      }
+   }
+
+   static int repairBlocks(MinecraftServer server, int seconds) {
+      int from = PvpBotMod.globalTick - seconds * 20;
+      int n = 0;
+      for (int i = BLOCK_LOG.size() - 1; i >= 0; i--) {
+         BlockRec r = BLOCK_LOG.get(i);
+         if (r.tick < from) {
+            break;
+         }
+
+         net.minecraft.server.world.ServerWorld w = r.world;
+         BlockState cur = w.getBlockState(r.pos);
+         if (r.restore != null) {
+            if (cur.isAir() || cur.getBlock() instanceof net.minecraft.block.FluidBlock) {
+               w.setBlockState(r.pos, r.restore, 3);
+               n++;
+            }
+         } else if (r.block instanceof net.minecraft.block.FluidBlock) {
+            for (BlockPos p : BlockPos.iterate(r.pos.add(-3, -3, -3), r.pos.add(3, 3, 3))) {
+               BlockState s = w.getBlockState(p);
+               if (s.getBlock() == r.block && (p.equals(r.pos) || !s.getFluidState().isStill())) {
+                  w.setBlockState(p, Blocks.AIR.getDefaultState(), 3);
+                  n++;
+               }
+            }
+         } else if (cur.isOf(r.block)) {
+            w.setBlockState(r.pos, Blocks.AIR.getDefaultState(), 3);
+            n++;
+         }
+
+         BLOCK_LOG.remove(i);
+      }
+
+      return n;
+   }
+
    /** World the player is in (works on every 1.21.11 Yarn build). */
    static net.minecraft.server.world.ServerWorld sw(ServerPlayerEntity p) {
       return (net.minecraft.server.world.ServerWorld)p.getEntityWorld();
@@ -3847,6 +3994,10 @@ final class BotSupport {
    }
 
    static void useOnce(MinecraftServer server, String name, PvpBotMod.Fight f) {
+      if (f != null && f.lastBot != null) {
+         trackHeld(f.lastBot);
+      }
+
       run(server, "player " + name + " use once");
       swing(f);
    }
@@ -5086,6 +5237,7 @@ final class BotSupport {
       }
 
       Kits.tick(server);
+      blockLogTick();
 
       if (!PvpBotMod.PENDING_CHESTS.isEmpty()) {
          tickPendingChests();
@@ -7017,6 +7169,9 @@ final class Fighting {
                   case WALLDEF:
                      wallPhase(server, name, f, bot, target, dist);
                      break;
+                  case HEALBUILD:
+                     healBuildPhase(server, name, f, bot, target, dist);
+                     break;
                   case RELOAD:
                      reloadPhase(server, name, f, bot, target, dist);
                      break;
@@ -7046,6 +7201,207 @@ final class Fighting {
             Tiers.exit();
          }
       }
+   }
+
+   // ---------------------------------------------------------------------
+   // Chase hop: far target, the bot places one block mid-jump and lands on it (momentum hop)
+   // ---------------------------------------------------------------------
+
+   static boolean chaseHopStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int now = PvpBotMod.globalTick;
+      if (!PvpBotMod.CHASE_HOP.on() || now < f.nextChaseHop || dist <= PvpBotMod.CHASE_HOP_DIST.value || dist > 60.0
+         || !bot.isOnGround() || BotSupport.inCobweb(bot) || f.pathActive || f.blocking || f.fortEat
+         || Math.abs(target.getY() - bot.getY()) > 2.5 || !(f.hopping || bot.isSprinting())) {
+         return false;
+      }
+
+      f.nextChaseHop = now + Math.max(10, PvpBotMod.CHASE_HOP_COOLDOWN.asInt());
+      if (!chance(PvpBotMod.CHASE_HOP_CHANCE.value)) {
+         return false;
+      }
+
+      int bidx = findPillarBlock(bot);
+      int slot = bidx < 0 ? -1 : BotSupport.toHotbar(bot, bidx, BotSupport.findWeaponSlot(bot));
+      if (slot < 0) {
+         return false;
+      }
+
+      BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+      BotSupport.run(server, "player " + name + " move forward");
+      BotSupport.run(server, "player " + name + " sprint");
+      BotSupport.run(server, "player " + name + " jump once");
+      clearFightFlags(f);
+      f.phase = PvpBotMod.Phase.WEBHOP; // reuses the momentum hop of the web hop
+      f.whStage = 11;
+      f.whStart = now;
+      f.whCycle = now;
+      f.whBase = bot.getY();
+      f.whLastX = bot.getX();
+      f.whLastY = bot.getY();
+      f.whLastZ = bot.getZ();
+      f.whSx = bot.getX();
+      f.whSz = bot.getZ();
+      flog(f, "chase hop: target " + String.format(Locale.ROOT, "%.1f", dist) + " blocks away");
+      return true;
+   }
+
+   // ---------------------------------------------------------------------
+   // Heal fort: build a block shelter (open at the back) before healing, mine it again afterwards
+   // ---------------------------------------------------------------------
+
+   static List<BlockPos> fortCellsFor(ServerPlayerEntity bot, ServerPlayerEntity target, int mode) {
+      double dx = target.getX() - bot.getX();
+      double dz = target.getZ() - bot.getZ();
+      int fx;
+      int fz;
+      if (Math.abs(dx) >= Math.abs(dz)) {
+         fx = dx > 0 ? 1 : -1;
+         fz = 0;
+      } else {
+         fx = 0;
+         fz = dz > 0 ? 1 : -1;
+      }
+
+      int px = -fz;
+      int pz = fx;
+      int[][] cols = new int[][]{{fx, fz}, {fx + px, fz + pz}, {fx - px, fz - pz}, {px, pz}, {-px, -pz}};
+      BlockPos b = bot.getBlockPos();
+      List<BlockPos> out = new ArrayList<>();
+      for (int h = 0; h < 2; h++) {
+         int n = (mode == 1 || h == 0) ? 5 : 3;
+         for (int i = 0; i < n; i++) {
+            out.add(b.add(cols[i][0], h, cols[i][1]));
+         }
+      }
+
+      return out;
+   }
+
+   static boolean startHealBuild(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int now = PvpBotMod.globalTick;
+      if (!PvpBotMod.HEAL_BUILD.on() || now < f.nextHealBuild || !bot.isOnGround() || BotSupport.inCobweb(bot)
+         || dist < 1.5 || dist > 14.0 || BotSupport.findFoodIndex(bot) < 0) {
+         return false;
+      }
+
+      f.nextHealBuild = now + 120;
+      if (!chance(PvpBotMod.HEAL_BUILD_CHANCE.value)) {
+         return false;
+      }
+
+      int bidx = findPillarBlock(bot);
+      int slot = bidx < 0 ? -1 : BotSupport.toHotbar(bot, bidx, BotSupport.findWeaponSlot(bot));
+      if (slot < 0) {
+         return false;
+      }
+
+      int mode = chance(PvpBotMod.HEAL_BUILD_FULL.value) ? 1 : 0;
+      BotSupport.run(server, "player " + name + " stop");
+      BotSupport.run(server, "player " + name + " unsprint");
+      BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+      clearFightFlags(f);
+      f.hbCells.clear();
+      f.hbCells.addAll(fortCellsFor(bot, target, mode));
+      f.hbIdx = 0;
+      f.hbPlaced = 0;
+      f.hbStage = 0;
+      f.hbSlot = slot;
+      f.hbStart = now;
+      f.hbNext = now;
+      f.phase = PvpBotMod.Phase.HEALBUILD;
+      flog(f, "heal build: " + (mode == 1 ? "full U" : "wall + shelf"));
+      return true;
+   }
+
+   static void healBuildDone(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot) {
+      BotSupport.run(server, "player " + name + " stop");
+      f.hbStage = 0;
+      f.phase = PvpBotMod.Phase.FIGHT;
+      startEat(server, name, f, bot, true);
+      if (f.phase == PvpBotMod.Phase.EAT) {
+         f.fortEat = true;
+      }
+   }
+
+   static void healBuildPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int now = PvpBotMod.globalTick;
+      World w = BotSupport.sw(bot);
+      if (now - f.hbStart > 70 || dist > 16.0 || BotSupport.inCobweb(bot) || f.hbPlaced >= PvpBotMod.HEAL_BUILD_MAX.asInt()) {
+         healBuildDone(server, name, f, bot);
+         return;
+      }
+
+      if (now < f.hbNext) {
+         return;
+      }
+
+      if (f.hbStage == 0) {
+         while (f.hbIdx < f.hbCells.size()) {
+            BlockPos c = f.hbCells.get(f.hbIdx);
+            BlockPos below = c.down();
+            if (w.getBlockState(c).isAir() && w.getBlockState(below).isFullCube(w, below) && !new Box(c).intersects(target.getBoundingBox())) {
+               break;
+            }
+
+            f.hbIdx++;
+         }
+
+         if (f.hbIdx >= f.hbCells.size()) {
+            healBuildDone(server, name, f, bot);
+            return;
+         }
+
+         if (!(bot.getInventory().getStack(f.hbSlot).getItem() instanceof net.minecraft.item.BlockItem)) {
+            int bi = findPillarBlock(bot);
+            int s = bi < 0 ? -1 : BotSupport.toHotbar(bot, bi, BotSupport.findWeaponSlot(bot));
+            if (s < 0) {
+               healBuildDone(server, name, f, bot);
+               return;
+            }
+
+            f.hbSlot = s;
+            BotSupport.run(server, "player " + name + " hotbar " + (s + 1));
+         }
+
+         BlockPos c = f.hbCells.get(f.hbIdx);
+         BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(c.getX() + 0.5) + " " + BotSupport.fmt(c.getY()) + " " + BotSupport.fmt(c.getZ() + 0.5));
+         f.hbStage = 1;
+         f.hbNext = now + 1;
+      } else if (f.hbStage == 1) {
+         BotSupport.useOnce(server, name, f);
+         f.hbStage = 2;
+         f.hbNext = now + 1;
+      } else {
+         BlockPos c = f.hbCells.get(f.hbIdx);
+         if (!w.getBlockState(c).isAir()) {
+            f.fortCells.add(c);
+            f.hbPlaced++;
+         }
+
+         f.hbIdx++;
+         f.hbStage = 0;
+         f.hbNext = now + 1;
+      }
+   }
+
+   /** after healing the bot mines its shelter again; the blocks go back into its inventory. */
+   static void fortBreakStep(PvpBotMod.Fight f, ServerPlayerEntity bot) {
+      int now = PvpBotMod.globalTick;
+      if (f.fortCells.isEmpty() || f.fortEat || now < f.fortNext) {
+         return;
+      }
+
+      f.fortNext = now + 2;
+      BlockPos c = f.fortCells.remove(f.fortCells.size() - 1);
+      net.minecraft.server.world.ServerWorld w = BotSupport.sw(bot);
+      BlockState s = w.getBlockState(c);
+      if (s.isAir() || s.getBlock() instanceof net.minecraft.block.FluidBlock || bot.squaredDistanceTo(c.getX() + 0.5, c.getY() + 0.5, c.getZ() + 0.5) > 36.0) {
+         return;
+      }
+
+      w.breakBlock(c, false, bot);
+      bot.getInventory().insertStack(new ItemStack(s.getBlock().asItem()));
+      BotSupport.swing(f);
    }
 
    static boolean doAttack(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity target) {
@@ -7158,6 +7514,7 @@ final class Fighting {
    }
 
    static void fightPhase(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      fortBreakStep(f, bot);
       double hpNow = bot.getHealth() + bot.getAbsorptionAmount();
       if (f.lastHp >= 0.0 && hpNow < f.lastHp - 0.01) {
          f.lastHurtTick = PvpBotMod.globalTick;
@@ -7301,6 +7658,7 @@ final class Fighting {
          || predWebStep(server, name, f, bot, target, dist)
          || knockEatStep(server, name, f, bot, target, dist, hpNow)
          || webHopStep(server, name, f, bot, target, dist)
+         || chaseHopStep(server, name, f, bot, target, dist)
          || mendStep(server, name, f, bot, target, dist)) {
          return;
       }
@@ -7345,7 +7703,7 @@ final class Fighting {
                   if (!startItemEscape(server, name, f, bot, target)) {
                      startEat(server, name, f, bot, true);
                   }
-               } else if (!predWebGap(server, name, f, bot, target, dist) && !startEatKnockback(server, name, f, bot, target, dist) && !startBlockRun(server, name, f, bot, target) && !startElyEscape(server, name, f, bot, target) && !startItemEscape(server, name, f, bot, target)) {
+               } else if (!predWebGap(server, name, f, bot, target, dist) && !startEatKnockback(server, name, f, bot, target, dist) && !startHealBuild(server, name, f, bot, target, dist) && !startBlockRun(server, name, f, bot, target) && !startElyEscape(server, name, f, bot, target) && !startItemEscape(server, name, f, bot, target)) {
                   startFlee(server, name, f, 0);
                }
             } else if (mirrorHealStep(server, name, f, bot, target, dist, hpNow)) {
@@ -14872,10 +15230,10 @@ final class Fighting {
          BotSupport.run(server, "player " + name + " sprint");
       }
 
-      if (!f.inCocoon && PvpBotMod.globalTick % 10 == 0) {
+      if (!f.inCocoon && !f.fortEat && PvpBotMod.globalTick % 10 == 0) {
          // keep sidestepping while eating so a diving mace user has a harder time lining up
          BotSupport.run(server, "player " + name + " move " + (ThreadLocalRandom.current().nextBoolean() ? "left" : "right"));
-      } else if (!f.inCocoon && PvpBotMod.globalTick % 10 == 5) {
+      } else if (!f.inCocoon && !f.fortEat && PvpBotMod.globalTick % 10 == 5) {
          BotSupport.run(server, "player " + name + " move forward");
       }
 
@@ -16405,6 +16763,8 @@ final class Gui {
       cat("FFA & Loot", "ffaloot", "ffafreeze", "ffalootrange", "ffalootmax", "ffamingear", "ffabreakchests", "lootchestrichness", "lootchestfillrange");
       cat("Pillar & Climb", "pillar", "pillarmax", "pillarmaxheight", "pillarcooldown", "climbcombo");
       cat("Debug", "fightlog");
+      cat("Building", "chasehop", "chasehopdist", "chasehopchance", "chasehopcooldown", "healbuild", "healbuildchance", "healbuildfull", "healbuildmax", "repairseconds");
+      catIcon("Building", Items.OAK_PLANKS);
       cat("Tiers", "nametagtiers");
       cat("TNT Cart", "tntcart", "tntcartchance", "tntcartneutral", "cartdefense", "cartdefensedist", "cartbreakchance", "cartdefensedelay", "cartmode", "cartfinishhp", "cartminhp", "cartpunish", "tntcartsafedist", "tntcartdrawticks", "tntcartcooldown", "xcartpreload", "xcartchance", "pearlcartchance", "cartdefensedelaymax", "cartdefensemiss", "walldef", "walldefchance");
       cat("Fall & Swap", "fallmace", "fallmacechance", "fallmaceheight", "fallclutch", "clutchheight", "clutchsuccess", "maceswap", "maceswapchance", "spearswap", "spearswapchance", "spearreach");
