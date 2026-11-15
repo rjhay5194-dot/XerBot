@@ -191,7 +191,7 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt REACH_LAG = opt("reachlag", "reach_lag", 4.0, 0.0, 10.0, false, "ticks of lag allowance: reach shrinks by the speed the target is moving away times this (after a knockback hit the target is flying away, the bot cannot reach it)");
    static final PvpBotMod.Opt LAST_SHOT = opt("lastshot", "last_shot", 1.0, 0.0, 1.0, true, "before the bot runs off or stops to heal, it fires a loaded crossbow (or a bow) at a nearly dead target as its last attack");
    static final PvpBotMod.Opt LAST_SHOT_HP = opt("lastshothp", "last_shot_hp", 9.0, 1.0, 20.0, false, "health points (2 = 1 heart): the last shot before healing is only taken when the target has this much health or less");
-   static final PvpBotMod.Opt HEAD_WEB_BREAK = opt("headwebbreak", "head_web_break", 1.0, 0.0, 1.0, true, "a bot stuck in a web at head level breaks it with its weapon instead of trying water (water cannot clear it)");
+   static final PvpBotMod.Opt HEAD_WEB_BREAK = opt("headwebbreak", "head_web_break", 1.0, 0.0, 1.0, true, "a bot stuck in a web at head level breaks it with its weapon (when headwebwater is on it tries water first and breaks it after headwebwaterticks)");
    static final PvpBotMod.Opt WEB_EXPECT_SHIELD = opt("webexpectshield", "web_expect_shield", 50.0, 0.0, 100.0, false, "percent chance a bot breaking a web expects an attack and keeps its shield up while the target is within 10 blocks");
    static final PvpBotMod.Opt SPEED_NOJUMP = opt("speednojump", "speed_no_jump", 1.0, 0.0, 1.0, true, "with Speed II or higher the bot does not jump or crit, except right after landing a run of hits in a row");
    static final PvpBotMod.Opt SPEED_HITS_MIN = opt("speedhitsmin", "speed_hits_min", 2.0, 1.0, 10.0, false, "fewest hits in a row (without being hit) before a Speed II bot jumps for a crit");
@@ -473,6 +473,23 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt HEAL_BUILD_FULL = opt("healbuildfull", "heal_build_full", 40.0, 0.0, 100.0, false, "percent of builds that are the full 2-layer U (feet + head layer on 5 sides) instead of the low wall + shelf");
    static final PvpBotMod.Opt HEAL_BUILD_MAX = opt("healbuildmax", "heal_build_max", 10.0, 3.0, 10.0, false, "most blocks one shelter may use");
    static final PvpBotMod.Opt REPAIR_SECONDS = opt("repairseconds", "repair_seconds", 120.0, 5.0, 600.0, false, "default seconds back that /pvpbot repair undoes");
+   static final PvpBotMod.Opt SHIELD_EXTRA = opt("shieldextra", "shield_extra_ticks", 8.0, 0.0, 40.0, false, "extra ticks added to every shield hold, because the shield needs about 5 ticks to really block on the server");
+   static final PvpBotMod.Opt APPROACH_STRAFE = opt("approachstrafe", "approach_strafe", 1.0, 0.0, 1.0, true, "while the bot runs at its target it holds left or right (switching now and then) and stops strafing when it is about to reach it");
+   static final PvpBotMod.Opt APPROACH_STRAFE_DIST = opt("approachstrafedist", "approach_strafe_dist", 18.0, 6.0, 60.0, false, "blocks within which the approach strafe starts");
+   static final PvpBotMod.Opt APPROACH_STRAFE_STOP = opt("approachstrafestop", "approach_strafe_stop", 4.0, 2.0, 10.0, false, "blocks from the target where the approach strafe stops and the bot goes straight in");
+   static final PvpBotMod.Opt APPROACH_STRAFE_CHANCE = opt("approachstrafechance", "approach_strafe_chance", 85.0, 0.0, 100.0, false, "percent chance a run at the target uses the approach strafe");
+   static final PvpBotMod.Opt APPROACH_STRAFE_HOLD = opt("approachstrafehold", "approach_strafe_hold", 14.0, 4.0, 60.0, false, "ticks one side is held before the approach strafe switches side");
+   static final PvpBotMod.Opt HIT_CROUCH_CHANCE = opt("hitcrouch", "hit_crouch_chance", 25.0, 0.0, 100.0, false, "percent chance the bot crouches for a moment right after it lands a hit");
+   static final PvpBotMod.Opt HIT_CROUCH_TICKS = opt("hitcrouchticks", "hit_crouch_ticks", 6.0, 2.0, 30.0, false, "about how many ticks a crouch after a hit lasts");
+   static final PvpBotMod.Opt HEAD_WEB_WATER = opt("headwebwater", "head_web_water", 1.0, 0.0, 1.0, true, "a bot with a web on its head (and a water bucket) places water beside it first; if the web is still there after headwebwaterticks it breaks it with its weapon while crouching");
+   static final PvpBotMod.Opt SURVIVE_STOP = opt("survivestop", "survive_stop", 4.0, 0.0, 4.0, false, "where /pvpbot survive stops when no stop point is given: 0 wood tools, 1 stone tools + furnace, 2 iron, 3 diamond, 4 pvp supplies (this build reaches 1)");
+   static final PvpBotMod.Opt SURVIVE_LOGS = opt("survivelogs", "survive_logs", 6.0, 3.0, 64.0, false, "logs a survival bot holds before it crafts its wooden tools (4 planks each)");
+   static final PvpBotMod.Opt SURVIVE_STONE = opt("survivestone", "survive_stone", 24.0, 16.0, 128.0, false, "cobblestone a survival bot collects before it crafts stone tools and a furnace");
+   static final PvpBotMod.Opt SURVIVE_FIGHT = opt("survivefight", "survive_fight", 1.0, 0.0, 1.0, true, "survival bots fight players with equal or worse gear and run away (bunny hopping) from players with better gear; off: they ignore players");
+   static final PvpBotMod.Opt SURVIVE_THREAT = opt("survivethreatdist", "survive_threat_dist", 20.0, 8.0, 48.0, false, "blocks within which a player counts as a threat to a survival bot");
+   static final PvpBotMod.Opt SURVIVE_LOOT = opt("surviveloot", "survive_loot", 1.0, 0.0, 1.0, true, "survival bots loot chests they find (one chest every few seconds, within the ffalootrange)");
+   static final PvpBotMod.Opt SURVIVE_MOBS = opt("survivemobs", "survive_mobs", 1.0, 0.0, 1.0, true, "survival bots fight hostile mobs that come close");
+   static final PvpBotMod.Opt HEAD_WEB_WATER_TICKS = opt("headwebwaterticks", "head_web_water_ticks", 60.0, 20.0, 200.0, false, "ticks (20 = 1 second) the water gets to clear a web at head level before the bot breaks it instead");
 
    static final PvpBotMod.Opt CART_FINISH_HP = opt(
       "cartfinishhp", "cart_finish_hp", 8.0, 2.0, 20.0, false, "target health (half hearts) at or under which the cart finisher is very likely (vexbot doctrine)"
@@ -1571,6 +1588,27 @@ public class PvpBotMod implements ModInitializer {
             )
       );
       root.then(
+         CommandManager.literal("survive")
+            .then(
+               CommandManager.literal("stop")
+                  .then(
+                     CommandManager.argument("name", StringArgumentType.word())
+                        .suggests(BOT_NAMES)
+                        .executes(ctx -> Survival.stopCmd(ctx, StringArgumentType.getString(ctx, "name")))
+                  )
+            )
+            .then(
+               ((RequiredArgumentBuilder)CommandManager.argument("name", StringArgumentType.word())
+                     .suggests(BOT_NAMES)
+                     .executes(ctx -> Survival.start(ctx, StringArgumentType.getString(ctx, "name"), null)))
+                  .then(
+                     CommandManager.argument("stopat", StringArgumentType.word())
+                        .suggests((ctx, builder) -> CommandSource.suggestMatching(Arrays.asList(Survival.STOP_NAMES), builder))
+                        .executes(ctx -> Survival.start(ctx, StringArgumentType.getString(ctx, "name"), StringArgumentType.getString(ctx, "stopat")))
+                  )
+            )
+      );
+      root.then(
          CommandManager.literal("repair")
             .executes(ctx -> repairCmd(ctx, REPAIR_SECONDS.asInt()))
             .then(CommandManager.argument("seconds", IntegerArgumentType.integer(5, 3600)).executes(ctx -> repairCmd(ctx, IntegerArgumentType.getInteger(ctx, "seconds"))))
@@ -1793,6 +1831,7 @@ public class PvpBotMod implements ModInitializer {
          } else {
             STOPPED.remove(name);
             GOTOS.remove(name);
+            Survival.JOBS.remove(name);
             PvpBotMod.Fight existing = FIGHTS.get(name);
             if (existing != null) {
                existing.target = t;
@@ -1814,6 +1853,7 @@ public class PvpBotMod implements ModInitializer {
       } else {
          FIGHTS.remove(name);
          GOTOS.remove(name);
+         Survival.JOBS.remove(name);
          STOPPED.add(name);
          BotSupport.run(src.getServer(), "player " + name + " stop");
          src.sendFeedback(() -> Text.literal(name + " stopped. It won't pick targets again until you use /pvpbot fight " + name + "."), false);
@@ -1835,6 +1875,7 @@ public class PvpBotMod implements ModInitializer {
       }
 
       PvpBotMod.FIGHTS.remove(name);
+      Survival.JOBS.remove(name);
       STOPPED.add(name);
       GOTOS.put(name, new PvpBotMod.GotoJob(requested));
       BotSupport.run(src.getServer(), "player " + name + " stop");
@@ -1948,6 +1989,7 @@ public class PvpBotMod implements ModInitializer {
          "/pvpbot tiers opens the tier menu: a tier LT5..HT1 per bot for Sword, SMP, Mace, ElytraMace and Axe (/pvpbot tier <bot> <sword|smp|mace|elytra|axe> <tier>, /pvpbot tiers random [min] [max]). The items a bot carries decide which tiers apply; several can apply at once. SMP = shield + cobwebs + splash potions. Skills come only from the tiers: Sword = aim, spacing, crits and hit-and-back-away; Axe = axe stuns and shield; SMP = webs, escapes, pearls and healing; Mace = smashes, wind charges and stun slams.",
          "Elytra + fireworks: /pvpbot elytraescapechance, elytrachasechance, elytraboosts, elytratakeoff (needs an elytra and firework rockets in the bot's inventory). Mace fear range: /pvpbot macefeardist.",
          "Lava on web: /pvpbot lavaweb, lavawebchance, lavawebticks, lavawebrepeats, lavawebside, lavawebback (needs a lava bucket in the bot's inventory). Web escape delay: /pvpbot webescapedelaymin and webescapedelaymax.",
+         "/pvpbot survive <bot> [wood|stone|iron|diamond|pvp] makes a bot survive on its own: it finds trees, crafts a crafting table and wooden tools, mines cobblestone, crafts stone tools and a furnace, and stops at the stage you pick (iron, diamond and PvP supplies come in the next update). Settings: survivestop, survivelogs, survivestone, survivefight, survivethreatdist, surviveloot, survivemobs. /pvpbot survive stop <bot> ends it. A survival bot runs (bunny hopping) from players with better gear and fights players with equal or worse gear.",
          "/pvpbot repair [seconds] undoes blocks (planks, webs, water, lava) placed in the last N seconds and restores broken ones.",
          "Every setting is /pvpbot <setting> [value]. Run /pvpbot options to see them all, or /pvpbot gui for a menu."
       };
@@ -2409,6 +2451,7 @@ public class PvpBotMod implements ModInitializer {
    static void removeBot(MinecraftServer server, String name) {
       FIGHTS.remove(name);
       GOTOS.remove(name);
+      Survival.JOBS.remove(name);
       BOTS.remove(name);
       STOPPED.remove(name);
       LAST_HURT.remove(name);
@@ -2890,6 +2933,11 @@ public class PvpBotMod implements ModInitializer {
 
       int nextChaseHop, nextHealBuild, hbStage, hbStart, hbIdx, hbNext, hbPlaced, hbSlot, fortNext;
       boolean fortEat;
+      boolean apprStrafe;
+      boolean webHeadWater;
+      boolean webSneak;
+      int apprNext;
+      int crouchUntil;
       final java.util.List<BlockPos> hbCells = new java.util.ArrayList<>();
       final java.util.List<BlockPos> fortCells = new java.util.ArrayList<>();
 
@@ -3034,6 +3082,10 @@ public class PvpBotMod implements ModInitializer {
          this.wcStage = 0;
          this.pillarStage = 0;
          this.hbStage = 0;
+         this.apprStrafe = false;
+         this.webHeadWater = false;
+         this.webSneak = false;
+         this.crouchUntil = 0;
       }
    }
 
@@ -3267,6 +3319,65 @@ final class BotSupport {
 
    static final ArrayList<BlockRec> BLOCK_LOG = new ArrayList<>();
    static final ArrayList<BlockRec> BLOCK_TRACK = new ArrayList<>();
+   /** positions of obsidian / cobblestone / stone that were already there when a bucket was emptied (these are never erased). */
+   static final java.util.HashSet<Long> GEN_SEEN = new java.util.HashSet<>();
+
+   static boolean genBlock(BlockState s) {
+      return s.isOf(Blocks.OBSIDIAN) || s.isOf(Blocks.COBBLESTONE) || s.isOf(Blocks.STONE);
+   }
+
+   static void snapshotGen(net.minecraft.server.world.ServerWorld w, BlockPos c) {
+      if (GEN_SEEN.size() > 30000) {
+         GEN_SEEN.clear();
+      }
+
+      for (BlockPos p : BlockPos.iterate(c.add(-6, -6, -6), c.add(6, 6, 6))) {
+         if (genBlock(w.getBlockState(p))) {
+            GEN_SEEN.add(p.asLong());
+         }
+      }
+   }
+
+   /** water and lava meeting make obsidian / cobblestone / stone: log the new ones so /pvpbot repair erases them. */
+   static void genScan() {
+      int now = PvpBotMod.globalTick;
+      if (now % 4 != 0) {
+         return;
+      }
+
+      ArrayList<BlockRec> centers = new ArrayList<>();
+      for (int i = BLOCK_LOG.size() - 1; i >= 0 && i > BLOCK_LOG.size() - 80; i--) {
+         BlockRec r = BLOCK_LOG.get(i);
+         if (now - r.tick > 300) {
+            break;
+         }
+
+         if (r.restore != null || !(r.block instanceof net.minecraft.block.FluidBlock || r.block == Blocks.OBSIDIAN || r.block == Blocks.COBBLESTONE || r.block == Blocks.STONE)) {
+            continue;
+         }
+
+         boolean dup = false;
+         for (BlockRec c : centers) {
+            if (c.world == r.world && c.pos.getSquaredDistance(r.pos) < 9.0) {
+               dup = true;
+               break;
+            }
+         }
+
+         if (!dup) {
+            centers.add(r);
+         }
+      }
+
+      for (BlockRec c : centers) {
+         for (BlockPos p : BlockPos.iterate(c.pos.add(-5, -5, -5), c.pos.add(5, 5, 5))) {
+            BlockState s = c.world.getBlockState(p);
+            if (genBlock(s) && GEN_SEEN.add(p.asLong())) {
+               BLOCK_LOG.add(new BlockRec(c.world, p.toImmutable(), now, s.getBlock(), null));
+            }
+         }
+      }
+   }
 
    static void trackHeld(ServerPlayerEntity b) {
       net.minecraft.util.hit.HitResult hr = b.raycast(5.0, 0.0F, false);
@@ -3280,6 +3391,10 @@ final class BotSupport {
          || st.getItem() instanceof net.minecraft.item.BlockItem bi && !(bi.getBlock() instanceof net.minecraft.block.ShulkerBoxBlock);
       if (!ok || BLOCK_TRACK.size() > 500) {
          return;
+      }
+
+      if (st.isOf(Items.WATER_BUCKET) || st.isOf(Items.LAVA_BUCKET)) {
+         snapshotGen(w, pos);
       }
 
       BlockState s = w.getBlockState(pos);
@@ -3306,6 +3421,7 @@ final class BotSupport {
 
    static void blockLogTick() {
       int now = PvpBotMod.globalTick;
+      genScan();
       Iterator<BlockRec> it = BLOCK_TRACK.iterator();
       while (it.hasNext()) {
          BlockRec r = it.next();
@@ -4511,6 +4627,57 @@ final class BotSupport {
       return true;
    }
 
+   /** look command that puts a water bucket's water into the head-level cell beside a web, so it flows into the web. */
+   static String headWaterAim(ServerPlayerEntity bot, String name, BlockPos web) {
+      net.minecraft.server.world.ServerWorld w = sw(bot);
+      net.minecraft.util.math.Direction pick = null;
+      for (net.minecraft.util.math.Direction d : net.minecraft.util.math.Direction.Type.HORIZONTAL) {
+         BlockState st = w.getBlockState(web.offset(d));
+         if (st.isAir() || st.isReplaceable()) {
+            pick = d;
+            break;
+         }
+      }
+
+      if (pick == null) {
+         return "player " + name + " look at " + fmt(web.getX() + 0.5) + " " + fmt(web.getY() + 0.5) + " " + fmt(web.getZ() + 0.5);
+      }
+
+      // standing inside the web the bucket puts the water on the side opposite to where the bot looks
+      return "player " + name + " look at " + fmt(bot.getX() - pick.getOffsetX() * 4.0) + " " + fmt(bot.getEyeY()) + " " + fmt(bot.getZ() - pick.getOffsetZ() * 4.0);
+   }
+
+   /** the water did not clear the web at head level in time: take the water back, then break the web with the weapon, crouching. */
+   static void headWaterGiveUp(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot) {
+      cleanupWater(bot, f);
+      f.webHeadWater = false;
+      BlockPos web = headLevelWeb(bot);
+      if (web == null) {
+         web = findCobweb(bot);
+      }
+
+      if (web == null) {
+         finishWeb(server, name, f, bot, 4);
+         return;
+      }
+
+      run(server, "player " + name + " stop");
+      int w = findWeaponSlot(bot);
+      if (w >= 0) {
+         run(server, "player " + name + " hotbar " + (w + 1));
+      }
+
+      run(server, "player " + name + " look at " + fmt(web.getX() + 0.5) + " " + fmt(web.getY() + 0.5) + " " + fmt(web.getZ() + 0.5));
+      run(server, "player " + name + " sneak");
+      run(server, "player " + name + " attack continuous");
+      f.webSneak = true;
+      f.webPos = web;
+      f.webStage = 10;
+      f.webStart = PvpBotMod.globalTick;
+      f.webFighting = false;
+      Fighting.flog(f, "head web: water did not clear it, breaking it crouched");
+   }
+
    static boolean webEscape(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
       if (f.webStage == 0) {
          if (f.inCocoon && PvpBotMod.globalTick % 40 == 0 && findCobweb(bot) != null) {
@@ -4532,7 +4699,7 @@ final class BotSupport {
                   web = headWeb;
                }
 
-               int idx = headWeb == null && PvpBotMod.WEB_ESCAPE.on() ? findItemIndex(bot, Items.WATER_BUCKET) : -1;
+               int idx = (headWeb == null || PvpBotMod.HEAD_WEB_WATER.on()) && PvpBotMod.WEB_ESCAPE.on() ? findItemIndex(bot, Items.WATER_BUCKET) : -1;
                int slot = idx < 0 ? -1 : toHotbar(bot, idx, findWeaponSlot(bot));
                if (slot < 0 && !PvpBotMod.WEB_BREAK.on() && headWeb == null) {
                   Fighting.flog(f, "in a web but no water bucket and webbreak is off");
@@ -4550,7 +4717,7 @@ final class BotSupport {
                   }
 
                   f.webReactAt = -1;
-                  String aim = "player "
+                  String aim = headWeb != null && slot >= 0 ? headWaterAim(bot, name, headWeb) : "player "
                      + name
                      + " look at "
                      + fmt(web.getX() + 0.5)
@@ -4564,6 +4731,7 @@ final class BotSupport {
                      run(server, aim);
                      f.webSlot = slot;
                      f.webStage = 1;
+                     f.webHeadWater = headWeb != null;
                   } else {
                      int w = findWeaponSlot(bot);
                      if (w >= 0) {
@@ -4572,6 +4740,11 @@ final class BotSupport {
 
                      run(server, aim);
                      run(server, "player " + name + " attack continuous");
+                     if (headWeb != null) {
+                        run(server, "player " + name + " sneak");
+                        f.webSneak = true;
+                     }
+
                      f.webStage = 10;
                      f.webExpect = ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.WEB_EXPECT_SHIELD.value;
                   }
@@ -4611,10 +4784,13 @@ final class BotSupport {
             }
          } else if (f.webStage == 2) {
             int elapsed = PvpBotMod.globalTick - f.webStart;
-            if (elapsed >= 2 && !inCobweb(bot) || elapsed >= 14) {
+            int limit = f.webHeadWater ? Math.max(20, PvpBotMod.HEAD_WEB_WATER_TICKS.asInt()) : 14;
+            if (elapsed >= 2 && !inCobweb(bot) || elapsed >= limit && !(f.webHeadWater && inCobweb(bot))) {
                useOnce(server, name, f);
                f.webStage = 3;
                f.webStart = PvpBotMod.globalTick;
+            } else if (f.webHeadWater && elapsed >= limit) {
+               headWaterGiveUp(server, name, f, bot);
             }
          } else if (f.webStage == 3) {
             if (PvpBotMod.globalTick - f.webStart >= 3) {
@@ -4696,6 +4872,12 @@ final class BotSupport {
 
    static void finishWeb(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, int cooldownTicks) {
       f.webStage = 0;
+      f.webHeadWater = false;
+      if (f.webSneak) {
+         f.webSneak = false;
+         run(server, "player " + name + " unsneak");
+      }
+
       f.webFightStart = -1;
       if (f.webFighting) {
          f.webFighting = false;
@@ -5259,6 +5441,7 @@ final class BotSupport {
 
          if (!ffaCounting()) {
             Fighting.tickGotos(server);
+            Survival.tick(server);
 
             if (PvpBotMod.REVENGE.on() && PvpBotMod.globalTick % 2 == 0) {
                tickRevenge(server);
@@ -7093,6 +7276,7 @@ final class Fighting {
                   abortHeal(server, name, f);
                }
 
+               crouchStep(server, name, f);
                switch (f.phase) {
                   case FIGHT:
                      fightPhase(server, name, f, bot, target, dist);
@@ -7470,6 +7654,53 @@ final class Fighting {
       return f.lastHit;
    }
 
+   /** extra ticks on every shield hold: the shield needs about 5 ticks to really block on the server. */
+   static int shieldExtra() {
+      return PvpBotMod.SHIELD_EXTRA.asInt();
+   }
+
+   /** run at the target holding left or right, switching side now and then; stops once the bot is about to reach it. */
+   static void approachStrafeStep(MinecraftServer server, String name, PvpBotMod.Fight f) {
+      int now = PvpBotMod.globalTick;
+      if (!f.apprStrafe) {
+         f.apprStrafe = true;
+         f.apprNext = chance(PvpBotMod.APPROACH_STRAFE_CHANCE.value) ? now : Integer.MAX_VALUE;
+      }
+
+      if (now < f.apprNext) {
+         return;
+      }
+
+      int hold = Math.max(4, PvpBotMod.APPROACH_STRAFE_HOLD.asInt());
+      f.strafeDir = f.strafeDir == 0 ? (ThreadLocalRandom.current().nextBoolean() ? 1 : -1) : -f.strafeDir;
+      BotSupport.run(server, "player " + name + " move " + (f.strafeDir > 0 ? "left" : "right"));
+      axisCmd(server, name, f);
+      f.apprNext = now + hold + ThreadLocalRandom.current().nextInt(hold / 2 + 1);
+   }
+
+   /** a short crouch right after the bot landed a hit. */
+   static void hitCrouch(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot) {
+      if (PvpBotMod.HIT_CROUCH_CHANCE.value <= 0.0 || f.crouchUntil > 0 || f.blocking || f.crit || f.edgeHold || f.fortEat
+         || f.webSneak || !bot.isOnGround() || BotSupport.inCobweb(bot) || !chance(PvpBotMod.HIT_CROUCH_CHANCE.value)) {
+         return;
+      }
+
+      int t = Math.max(2, PvpBotMod.HIT_CROUCH_TICKS.asInt());
+      int dur = Math.max(2, t / 2 + ThreadLocalRandom.current().nextInt(t + 1));
+      BotSupport.run(server, "player " + name + " sneak");
+      f.crouchUntil = PvpBotMod.globalTick + dur;
+      f.sprintHoldUntil = Math.max(f.sprintHoldUntil, f.crouchUntil);
+   }
+
+   static void crouchStep(MinecraftServer server, String name, PvpBotMod.Fight f) {
+      if (f.crouchUntil > 0 && PvpBotMod.globalTick >= f.crouchUntil) {
+         f.crouchUntil = 0;
+         if (!f.webSneak) {
+            BotSupport.run(server, "player " + name + " unsneak");
+         }
+      }
+   }
+
    static void axisCmd(MinecraftServer server, String name, PvpBotMod.Fight f) {
       if (f.keepMode > 0) {
          BotSupport.run(server, "player " + name + " move forward");
@@ -7544,7 +7775,7 @@ final class Fighting {
                && !target.getMainHandStack().isIn(ItemTags.AXES)) {
                int glo = Math.min(PvpBotMod.CRIT_GUARD_MIN.asInt(), PvpBotMod.CRIT_GUARD_MAX.asInt());
                int ghi = Math.max(PvpBotMod.CRIT_GUARD_MIN.asInt(), PvpBotMod.CRIT_GUARD_MAX.asInt());
-               f.blockUntil = PvpBotMod.globalTick + glo + ThreadLocalRandom.current().nextInt(ghi - glo + 1);
+               f.blockUntil = PvpBotMod.globalTick + glo + ThreadLocalRandom.current().nextInt(ghi - glo + 1) + shieldExtra();
                if (!f.blocking) {
                   BotSupport.run(server, "player " + name + " use continuous");
                   f.blocking = true;
@@ -7840,7 +8071,7 @@ final class Fighting {
                         f.blocking = true;
                         int lo = Math.min(PvpBotMod.POSTSWING_SHIELD_TICKS_MIN.asInt(), PvpBotMod.POSTSWING_SHIELD_TICKS_MAX.asInt());
                         int hi = Math.max(PvpBotMod.POSTSWING_SHIELD_TICKS_MIN.asInt(), PvpBotMod.POSTSWING_SHIELD_TICKS_MAX.asInt());
-                        f.blockUntil = PvpBotMod.globalTick + Math.max(2, lo + ThreadLocalRandom.current().nextInt(hi - lo + 1));
+                        f.blockUntil = PvpBotMod.globalTick + Math.max(2, lo + ThreadLocalRandom.current().nextInt(hi - lo + 1)) + shieldExtra();
                      }
                   }
 
@@ -7895,6 +8126,19 @@ final class Fighting {
                            BotSupport.run(server, "player " + name + " sprint");
                         }
 
+                        boolean apprZone = PvpBotMod.APPROACH_STRAFE.on() && !f.crit && !f.edgeHold && f.keepMode > 0
+                           && PvpBotMod.globalTick >= f.sidestepUntil && !targetMaceThreat(bot, target)
+                           && dist > PvpBotMod.APPROACH_STRAFE_STOP.value && dist <= PvpBotMod.APPROACH_STRAFE_DIST.value;
+                        if (f.apprStrafe && !apprZone) {
+                           // about to reach the target: stop strafing and go straight in
+                           f.apprStrafe = false;
+                           if (f.strafeDir != 0) {
+                              stopStrafe(server, name, f);
+                           }
+
+                           f.nextStrafeTick = Math.max(f.nextStrafeTick, PvpBotMod.globalTick + 8);
+                        }
+
                         boolean circling = (circleOn || f.comboLeft > 0) && !f.hopping && !f.edgeHold && dist <= 5.0 && !targetMaceThreat(bot, target);
                         if (circling) {
                            // crit-circle: keep one strafe direction (a circle, not a zig-zag) while staying close
@@ -7908,6 +8152,8 @@ final class Fighting {
                               axisCmd(server, name, f);
                               f.nextStrafeTick = PvpBotMod.globalTick + 6;
                            }
+                        } else if (apprZone) {
+                           approachStrafeStep(server, name, f);
                         } else if (PvpBotMod.STRAFE.on() && !f.hopping && !f.crit && dist <= 6.0 && !targetMaceThreat(bot, target)) {
                            if (PvpBotMod.globalTick >= f.nextStrafeTick) {
                               if (ThreadLocalRandom.current().nextDouble() * 100.0 < (archer ? 100.0 : PvpBotMod.STRAFE_CHANCE.value)) {
@@ -7969,6 +8215,7 @@ final class Fighting {
                         f.confidence = Math.min(1.0, f.confidence + 0.12);
                         f.critGuardCount = 0;
                         f.lastLanded = PvpBotMod.globalTick;
+                        hitCrouch(server, name, f, bot);
                         if (f.landGoal >= 0 && f.landStreak >= f.landGoal) {
                            f.landStreak = 0;
                            f.landGoal = -1;
@@ -8028,7 +8275,7 @@ final class Fighting {
                         f.threatHoldFrom = PvpBotMod.globalTick;
                         BotSupport.run(server, "player " + name + " use continuous");
                         f.blocking = true;
-                        f.blockUntil = PvpBotMod.globalTick + Math.max(2, PvpBotMod.SHIELD_TICKS_MAX.asInt());
+                        f.blockUntil = PvpBotMod.globalTick + Math.max(2, PvpBotMod.SHIELD_TICKS_MAX.asInt()) + shieldExtra();
                      } else {
                         if (f.blocking) {
                            if (PvpBotMod.globalTick < f.blockUntil) {
@@ -8050,7 +8297,7 @@ final class Fighting {
                            f.threatHold = false;
                            int lo = Math.min(PvpBotMod.SHIELD_TICKS.asInt(), PvpBotMod.SHIELD_TICKS_MAX.asInt());
                            int hi = Math.max(PvpBotMod.SHIELD_TICKS.asInt(), PvpBotMod.SHIELD_TICKS_MAX.asInt());
-                           f.blockUntil = PvpBotMod.globalTick + Math.max(2, lo + ThreadLocalRandom.current().nextInt(hi - lo + 1));
+                           f.blockUntil = PvpBotMod.globalTick + Math.max(2, lo + ThreadLocalRandom.current().nextInt(hi - lo + 1)) + shieldExtra();
                            return;
                         }
 
@@ -11137,7 +11384,7 @@ final class Fighting {
             if (imminent) {
                BotSupport.run(server, "player " + name + " use continuous");
                f.blocking = true;
-               f.blockUntil = PvpBotMod.globalTick + 12;
+               f.blockUntil = PvpBotMod.globalTick + 12 + shieldExtra();
             }
          }
 
@@ -16765,6 +17012,10 @@ final class Gui {
       cat("Debug", "fightlog");
       cat("Building", "chasehop", "chasehopdist", "chasehopchance", "chasehopcooldown", "healbuild", "healbuildchance", "healbuildfull", "healbuildmax", "repairseconds");
       catIcon("Building", Items.OAK_PLANKS);
+      cat("Extras", "shieldextra", "approachstrafe", "approachstrafedist", "approachstrafestop", "approachstrafechance", "approachstrafehold", "hitcrouch", "hitcrouchticks", "headwebwater", "headwebwaterticks");
+      catIcon("Extras", Items.SHIELD);
+      cat("Auto Survival", "survivestop", "survivelogs", "survivestone", "survivefight", "survivethreatdist", "surviveloot", "survivemobs");
+      catIcon("Auto Survival", Items.IRON_PICKAXE);
       cat("Tiers", "nametagtiers");
       cat("TNT Cart", "tntcart", "tntcartchance", "tntcartneutral", "cartdefense", "cartdefensedist", "cartbreakchance", "cartdefensedelay", "cartmode", "cartfinishhp", "cartminhp", "cartpunish", "tntcartsafedist", "tntcartdrawticks", "tntcartcooldown", "xcartpreload", "xcartchance", "pearlcartchance", "cartdefensedelaymax", "cartdefensemiss", "walldef", "walldefchance");
       cat("Fall & Swap", "fallmace", "fallmacechance", "fallmaceheight", "fallclutch", "clutchheight", "clutchsuccess", "maceswap", "maceswapchance", "spearswap", "spearswapchance", "spearreach");
@@ -21744,5 +21995,1270 @@ final class Arena {
 
    static int ladderCmd(CommandContext<ServerCommandSource> ctx, String b1, String b2) throws CommandSyntaxException {
       return reply(ctx, startLadder(ctx.getSource().getServer(), ctx.getSource().getPlayerOrThrow(), b1, b2), "Ladder started.");
+   }
+}
+
+/**
+ * Survival mode: a bot with nothing gathers wood, crafts wooden tools, mines cobblestone, crafts stone tools and a furnace.
+ * /pvpbot survive <bot> [wood|stone|iron|diamond|pvp] (the later stages come in the next update).
+ * Mining and crafting are done server side (blocks are broken with the real mining time of the tool in hand, crafting uses the inventory directly).
+ */
+final class Survival {
+   static final java.util.Map<String, Job> JOBS = new java.util.TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+   static final String[] STOP_NAMES = new String[]{"wood", "stone", "iron", "diamond", "pvp"};
+   static final String[] STAGE_NAMES = new String[]{
+      "gathering wood", "crafting wooden tools", "gathering cobblestone", "crafting stone tools and a furnace", "done"
+   };
+   static final int ST_GATHER_WOOD = 0;
+   static final int ST_CRAFT_WOOD = 1;
+   static final int ST_GATHER_STONE = 2;
+   static final int ST_CRAFT_STONE = 3;
+   static final int ST_DONE = 4;
+   static final int M_THINK = 0;
+   static final int M_WALK = 1;
+   static final int M_MINE = 2;
+   static final int M_FLEE = 3;
+   static final net.minecraft.util.math.Direction[] HORIZ = new net.minecraft.util.math.Direction[]{
+      net.minecraft.util.math.Direction.NORTH,
+      net.minecraft.util.math.Direction.EAST,
+      net.minecraft.util.math.Direction.SOUTH,
+      net.minecraft.util.math.Direction.WEST
+   };
+
+   static final class Job {
+      int stopAt;
+      int stage = -1;
+      int mode = M_THINK;
+      boolean done;
+      boolean fighting;
+      PvpBotMod.GotoJob gj;
+      int gjFails;
+      int walkStart;
+      BlockPos tgt;
+      BlockPos exploreDest;
+      double exploreAngle = ThreadLocalRandom.current().nextDouble() * Math.PI * 2.0;
+      int exploreHops;
+      int mineStage;
+      int mineProg;
+      int mineNeed;
+      int nextThink;
+      int nextThreat;
+      int nextLoot = PvpBotMod.globalTick + 100;
+      int nextWide;
+      int craftFails;
+      int digSteps;
+      int digTurns;
+      net.minecraft.util.math.Direction digDir;
+      String fleeFrom;
+      int fleeUntil;
+      int nextFleePlan;
+      BlockPos fleeDest;
+      net.minecraft.entity.mob.HostileEntity mob;
+      int mobStart;
+      int mobIgnoreUntil;
+      boolean mobFighting;
+      final java.util.Set<Long> bad = new java.util.HashSet<>();
+   }
+
+   // ------------------------------------------------------------------ commands
+
+   static int start(CommandContext<ServerCommandSource> ctx, String name, String stopText) {
+      ServerCommandSource src = (ServerCommandSource)ctx.getSource();
+      if (!PvpBotMod.BOTS.contains(name)) {
+         src.sendError(Text.literal(name + " is not a PvP bot yet. If you spawned it with /playerspawn, run /pvpbot adopt " + name + " first."));
+         return 0;
+      }
+
+      ServerPlayerEntity bot = src.getServer().getPlayerManager().getPlayer(name);
+      if (bot == null) {
+         src.sendError(Text.literal(name + " is not online."));
+         return 0;
+      }
+
+      int stop = PvpBotMod.SURVIVE_STOP.asInt();
+      if (stopText != null) {
+         stop = -1;
+         for (int i = 0; i < STOP_NAMES.length; i++) {
+            if (STOP_NAMES[i].equalsIgnoreCase(stopText)) {
+               stop = i;
+            }
+         }
+
+         if (stop < 0) {
+            src.sendError(Text.literal("Unknown stop point. Use wood, stone, iron, diamond or pvp."));
+            return 0;
+         }
+      }
+
+      int stopFinal = stop;
+      PvpBotMod.FIGHTS.remove(name);
+      PvpBotMod.GOTOS.remove(name);
+      Job j = new Job();
+      j.stopAt = stopFinal;
+      JOBS.put(name, j);
+      PvpBotMod.STOPPED.add(name);
+      BotSupport.run(src.getServer(), "player " + name + " stop");
+      BotSupport.run(src.getServer(), "player " + name + " autojump false");
+      src.sendFeedback(
+         () -> Text.literal(
+            name + " is now surviving on its own and stops at: " + STOP_NAMES[stopFinal]
+               + (stopFinal > 1 ? " (this build reaches stone tools + furnace; caves, iron and diamonds come next)" : "")
+               + "."
+         ),
+         false
+      );
+      return 1;
+   }
+
+   static int stopCmd(CommandContext<ServerCommandSource> ctx, String name) {
+      ServerCommandSource src = (ServerCommandSource)ctx.getSource();
+      Job j = JOBS.remove(name);
+      if (j == null) {
+         src.sendError(Text.literal(name + " is not in survival mode."));
+         return 0;
+      }
+
+      PvpBotMod.STOPPED.remove(name);
+      BotSupport.run(src.getServer(), "player " + name + " stop");
+      BotSupport.run(src.getServer(), "player " + name + " autojump true");
+      src.sendFeedback(() -> Text.literal(name + " left survival mode."), false);
+      return 1;
+   }
+
+   // ------------------------------------------------------------------ tick
+
+   static void tick(MinecraftServer server) {
+      if (JOBS.isEmpty()) {
+         return;
+      }
+
+      Iterator<Entry<String, Job>> it = JOBS.entrySet().iterator();
+      while (it.hasNext()) {
+         Entry<String, Job> e = it.next();
+         String name = e.getKey();
+         Job s = e.getValue();
+         ServerPlayerEntity bot = server.getPlayerManager().getPlayer(name);
+         if (bot == null || !PvpBotMod.BOTS.contains(name)) {
+            it.remove();
+            continue;
+         }
+
+         if (bot.isAlive()) {
+            try {
+               step(server, name, s, bot);
+            } catch (RuntimeException ex) {
+               Fighting.flogName(name, "survive error: " + ex);
+            }
+         }
+
+         if (s.done) {
+            it.remove();
+         }
+      }
+   }
+
+   static void step(MinecraftServer server, String name, Job s, ServerPlayerEntity bot) {
+      int now = PvpBotMod.globalTick;
+      if (PvpBotMod.ffaActive || Tournament.isFighter(name) || PvpBotMod.TEST_LOOT.contains(name) || PvpBotMod.GOTOS.containsKey(name)) {
+         return;
+      }
+
+      net.minecraft.server.world.ServerWorld w = BotSupport.sw(bot);
+      if (PvpBotMod.FIGHTS.containsKey(name)) {
+         fightWatch(server, name, s, bot);
+         return;
+      }
+
+      if (s.fighting) {
+         s.fighting = false;
+         s.mode = M_THINK;
+         s.gj = null;
+         BotSupport.run(server, "player " + name + " stop");
+         BotSupport.run(server, "player " + name + " autojump false");
+      }
+
+      PvpBotMod.STOPPED.add(name);
+      if (s.mode == M_FLEE) {
+         fleeTick(server, name, s, bot, w);
+         return;
+      }
+
+      if (now >= s.nextThreat) {
+         s.nextThreat = now + 5;
+         if (threatStep(server, name, s, bot)) {
+            return;
+         }
+      }
+
+      if (mobStep(server, name, s, bot, w)) {
+         return;
+      }
+
+      if (s.mode == M_MINE) {
+         mineTick(server, name, s, bot, w);
+         return;
+      }
+
+      if (s.mode == M_WALK) {
+         walkTick(server, name, s, bot, w);
+         return;
+      }
+
+      if (PvpBotMod.SURVIVE_LOOT.on() && now >= s.nextLoot) {
+         s.nextLoot = now + 200;
+         String err = BotSupport.startChestTest(server, name, bot);
+         if (err == null) {
+            Fighting.flogName(name, "survive: found a chest, looting it");
+            return;
+         }
+      }
+
+      think(server, name, s, bot, w);
+   }
+
+   // ------------------------------------------------------------------ players: fight or run
+
+   static boolean threatStep(MinecraftServer server, String name, Job s, ServerPlayerEntity bot) {
+      if (!PvpBotMod.SURVIVE_FIGHT.on()) {
+         return false;
+      }
+
+      net.minecraft.server.world.ServerWorld w = BotSupport.sw(bot);
+      double range = PvpBotMod.SURVIVE_THREAT.value;
+      ServerPlayerEntity nearest = null;
+      double nd = range * range;
+      for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList()) {
+         if (p == bot || !p.isAlive() || p.isCreative() || p.isSpectator() || BotSupport.sw(p) != w) {
+            continue;
+         }
+
+         String pn = p.getName().getString();
+         if (JOBS.containsKey(pn) || BotSupport.allied(bot, p)) {
+            continue;
+         }
+
+         double d = bot.squaredDistanceTo(p);
+         if (d < nd) {
+            nd = d;
+            nearest = p;
+         }
+      }
+
+      if (nearest == null) {
+         return false;
+      }
+
+      double tg = gear(nearest);
+      double bg = gear(bot);
+      double dist = Math.sqrt(nd);
+      boolean attacked = bot.getAttacker() == nearest && bot.age - bot.getLastAttackedTime() < 100;
+      if (tg > bg + 1.0) {
+         s.mode = M_FLEE;
+         s.fleeFrom = nearest.getName().getString();
+         s.fleeUntil = PvpBotMod.globalTick + 400;
+         s.fleeDest = null;
+         s.nextFleePlan = 0;
+         s.tgt = null;
+         s.gj = null;
+         Fighting.flogName(name, "survive: " + s.fleeFrom + " has better gear (" + String.format(Locale.ROOT, "%.1f", tg) + " vs " + String.format(Locale.ROOT, "%.1f", bg) + "), running away");
+         return true;
+      }
+
+      if (bg >= tg && (bg > 0.0 || attacked) && dist <= Math.min(12.0, range)) {
+         PvpBotMod.STOPPED.remove(name);
+         PvpBotMod.FIGHTS.put(name, new PvpBotMod.Fight(nearest.getName().getString()));
+         BotSupport.run(server, "player " + name + " stop");
+         BotSupport.run(server, "player " + name + " autojump true");
+         s.fighting = true;
+         s.mode = M_THINK;
+         s.tgt = null;
+         s.gj = null;
+         Fighting.flogName(name, "survive: fighting " + nearest.getName().getString() + " (gear " + String.format(Locale.ROOT, "%.1f", bg) + " vs " + String.format(Locale.ROOT, "%.1f", tg) + ")");
+         return true;
+      }
+
+      return false;
+   }
+
+   static void fightWatch(MinecraftServer server, String name, Job s, ServerPlayerEntity bot) {
+      if (!s.fighting || PvpBotMod.globalTick % 20 != 0) {
+         return;
+      }
+
+      PvpBotMod.Fight f = PvpBotMod.FIGHTS.get(name);
+      ServerPlayerEntity t = f == null ? null : server.getPlayerManager().getPlayer(f.target);
+      if (f != null && (t == null || !t.isAlive() || t.isCreative() || t.isSpectator() || bot.distanceTo(t) > PvpBotMod.SURVIVE_THREAT.value * 2.0)) {
+         PvpBotMod.FIGHTS.remove(name);
+         Fighting.flogName(name, "survive: the fight is over, back to work");
+      }
+   }
+
+   static double gear(ServerPlayerEntity p) {
+      int weapon = 0;
+      PlayerInventory inv = p.getInventory();
+      for (int i = 0; i < 36; i++) {
+         ItemStack st = inv.getStack(i);
+         if (st.isEmpty()) {
+            continue;
+         }
+
+         if (st.isIn(ItemTags.SWORDS) || st.isIn(ItemTags.AXES)) {
+            weapon = Math.max(weapon, tierOf(st));
+         } else if (st.isOf(Items.MACE)) {
+            weapon = Math.max(weapon, 5);
+         }
+      }
+
+      double g = p.getArmor() * 0.6 + weapon * 2.0;
+      if (p.getOffHandStack().isOf(Items.SHIELD)) {
+         g += 1.0;
+      }
+
+      return g;
+   }
+
+   static void fleeTick(MinecraftServer server, String name, Job s, ServerPlayerEntity bot, net.minecraft.server.world.ServerWorld w) {
+      int now = PvpBotMod.globalTick;
+      ServerPlayerEntity p = s.fleeFrom == null ? null : server.getPlayerManager().getPlayer(s.fleeFrom);
+      if (p == null || !p.isAlive() || BotSupport.sw(p) != w || now > s.fleeUntil || bot.distanceTo(p) > PvpBotMod.SURVIVE_THREAT.value * 2.0) {
+         s.mode = M_THINK;
+         s.gj = null;
+         s.fleeDest = null;
+         BotSupport.run(server, "player " + name + " stop");
+         Fighting.flogName(name, "survive: safe again, back to work");
+         return;
+      }
+
+      double ax = bot.getX() - p.getX();
+      double az = bot.getZ() - p.getZ();
+      double len = Math.max(0.1, Math.sqrt(ax * ax + az * az));
+      ax /= len;
+      az /= len;
+      if (s.fleeDest == null || now >= s.nextFleePlan) {
+         s.nextFleePlan = now + 40;
+         s.fleeDest = null;
+         double[] angs = new double[]{0.0, 0.7, -0.7, 1.4, -1.4};
+         for (double a : angs) {
+            double c = Math.cos(a);
+            double sn = Math.sin(a);
+            double dx = ax * c - az * sn;
+            double dz = ax * sn + az * c;
+            int x = (int)Math.floor(bot.getX() + dx * 24.0);
+            int z = (int)Math.floor(bot.getZ() + dz * 24.0);
+            if (!w.isChunkLoaded(x >> 4, z >> 4)) {
+               continue;
+            }
+
+            BlockPos g = Fighting.resolveGotoGoal(w, new BlockPos(x, bot.getBlockY(), z));
+            if (g != null) {
+               s.fleeDest = g;
+               s.gj = null;
+               break;
+            }
+         }
+      }
+
+      if (s.fleeDest != null) {
+         int r = walk(server, name, s, bot, s.fleeDest);
+         if (r != 0) {
+            s.fleeDest = null;
+            s.nextFleePlan = 0;
+         }
+
+         return;
+      }
+
+      // no path found: just run straight away from the player, hopping
+      double yaw = Math.toDegrees(Math.atan2(-ax, az));
+      BotSupport.run(server, "player " + name + " look " + String.format(Locale.ROOT, "%.1f", yaw) + " 0");
+      BotSupport.run(server, "player " + name + " move forward");
+      BotSupport.run(server, "player " + name + " sprint");
+      if (bot.isOnGround() && now % 10 == 0) {
+         BotSupport.run(server, "player " + name + " jump once");
+      }
+   }
+
+   // ------------------------------------------------------------------ hostile mobs
+
+   static boolean mobStep(MinecraftServer server, String name, Job s, ServerPlayerEntity bot, net.minecraft.server.world.ServerWorld w) {
+      if (!PvpBotMod.SURVIVE_MOBS.on()) {
+         return false;
+      }
+
+      int now = PvpBotMod.globalTick;
+      if (now < s.mobIgnoreUntil) {
+         return false;
+      }
+
+      if (s.mob == null || !s.mob.isAlive() || bot.squaredDistanceTo(s.mob) > 100.0) {
+         s.mob = null;
+         if (now % 5 == 0) {
+            double bd = 49.0;
+            for (net.minecraft.entity.mob.HostileEntity m : w.getEntitiesByClass(net.minecraft.entity.mob.HostileEntity.class, bot.getBoundingBox().expand(7.0), e -> e.isAlive())) {
+               double d = bot.squaredDistanceTo(m);
+               if (d < bd) {
+                  bd = d;
+                  s.mob = m;
+               }
+            }
+
+            if (s.mob != null) {
+               s.mobStart = now;
+            }
+         }
+      }
+
+      net.minecraft.entity.mob.HostileEntity m = s.mob;
+      if (m == null) {
+         if (s.mobFighting) {
+            s.mobFighting = false;
+            BotSupport.run(server, "player " + name + " stop");
+         }
+
+         return false;
+      }
+
+      if (now - s.mobStart > 300) {
+         s.mob = null;
+         s.mobIgnoreUntil = now + 100;
+         return false;
+      }
+
+      s.mobFighting = true;
+      s.mode = M_THINK;
+      s.tgt = null;
+      s.gj = null;
+      if (now % 20 == 0) {
+         int ws = BotSupport.findWeaponSlot(bot);
+         if (ws >= 0) {
+            BotSupport.run(server, "player " + name + " hotbar " + (ws + 1));
+         }
+      }
+
+      BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(m.getX()) + " " + BotSupport.fmt(m.getEyeY()) + " " + BotSupport.fmt(m.getZ()));
+      double dist = bot.distanceTo(m);
+      if (dist > 2.8) {
+         if (now % 10 == 0) {
+            BotSupport.run(server, "player " + name + " move forward");
+            BotSupport.run(server, "player " + name + " sprint");
+         }
+      } else {
+         if (now % 10 == 0) {
+            BotSupport.run(server, "player " + name + " move");
+         }
+
+         if (bot.getAttackCooldownProgress(0.5F) >= 1.0F) {
+            bot.attack(m);
+            bot.swingHand(Hand.MAIN_HAND);
+         }
+      }
+
+      return true;
+   }
+
+   // ------------------------------------------------------------------ what to do next
+
+   static void think(MinecraftServer server, String name, Job s, ServerPlayerEntity bot, net.minecraft.server.world.ServerWorld w) {
+      int now = PvpBotMod.globalTick;
+      if (now < s.nextThink) {
+         return;
+      }
+
+      s.nextThink = now + 5;
+      int stage = stageOf(bot, s);
+      if (stage != s.stage) {
+         s.stage = stage;
+         s.digSteps = 0;
+         s.digTurns = 0;
+         s.digDir = null;
+         Fighting.flogName(name, "survive: " + STAGE_NAMES[stage]);
+      }
+
+      switch (stage) {
+         case ST_DONE:
+            finish(server, name, s, s.stopAt <= 0
+               ? "has wooden tools and stops at wood."
+               : "has stone tools and a furnace" + (s.stopAt > 1 ? " (caves, iron and diamonds come in the next update)." : "."));
+            return;
+         case ST_CRAFT_WOOD:
+            if (!craftWood(w, bot)) {
+               s.craftFails++;
+               s.nextThink = now + 20;
+               if (s.craftFails >= 6) {
+                  finish(server, name, s, "could not craft wooden tools (no room for a crafting table?).");
+               }
+            }
+
+            return;
+         case ST_CRAFT_STONE:
+            if (!craftStone(w, bot)) {
+               s.craftFails++;
+               s.nextThink = now + 20;
+               if (s.craftFails >= 6) {
+                  finish(server, name, s, "could not craft stone tools.");
+               }
+            }
+
+            return;
+         case ST_GATHER_WOOD:
+            gatherWood(server, name, s, bot, w);
+            return;
+         default:
+            gatherStone(server, name, s, bot, w);
+      }
+   }
+
+   static int stageOf(ServerPlayerEntity bot, Job s) {
+      int pick = bestTier(bot, ItemTags.PICKAXES);
+      int axe = bestTier(bot, ItemTags.AXES);
+      int sword = bestTier(bot, ItemTags.SWORDS);
+      int equiv = count(bot, Survival::isPlanks) + 4 * count(bot, Survival::isLog);
+      if (pick < 1 || axe < 1 || sword < 1) {
+         int need = 8 + (pick < 1 ? 3 : 0) + (axe < 1 ? 3 : 0) + (sword < 1 ? 2 : 0);
+         int target = Math.max(need, PvpBotMod.SURVIVE_LOGS.asInt() * 4);
+         if (equiv >= target || equiv >= need && s.exploreHops >= 8) {
+            return ST_CRAFT_WOOD;
+         }
+
+         return ST_GATHER_WOOD;
+      }
+
+      if (s.stopAt <= 0) {
+         return ST_DONE;
+      }
+
+      int furnaces = count(bot, st -> st.isOf(Items.FURNACE));
+      if (pick >= 2 && axe >= 2 && sword >= 2 && furnaces >= 1) {
+         return ST_DONE;
+      }
+
+      int cobNeed = (pick < 2 ? 3 : 0) + (axe < 2 ? 3 : 0) + (sword < 2 ? 2 : 0) + (furnaces < 1 ? 8 : 0);
+      int sticksHave = count(bot, st -> st.isOf(Items.STICK));
+      int tables = count(bot, st -> st.isOf(Items.CRAFTING_TABLE));
+      int woodNeeded = (tables < 1 ? 4 : 0) + (sticksHave < 5 ? 2 : 0);
+      if (equiv < woodNeeded) {
+         return ST_GATHER_WOOD;
+      }
+
+      if (count(bot, Survival::isCobble) < Math.max(cobNeed, PvpBotMod.SURVIVE_STONE.asInt())) {
+         return ST_GATHER_STONE;
+      }
+
+      return ST_CRAFT_STONE;
+   }
+
+   static void finish(MinecraftServer server, String name, Job s, String why) {
+      s.done = true;
+      BotSupport.run(server, "player " + name + " stop");
+      BotSupport.run(server, "player " + name + " autojump true");
+      PvpBotMod.STOPPED.remove(name);
+      BotSupport.broadcast(server, name + " (survival): " + why);
+      Fighting.flogName(name, "survive: finished - " + why);
+   }
+
+   // ------------------------------------------------------------------ gathering
+
+   static void gatherWood(MinecraftServer server, String name, Job s, ServerPlayerEntity bot, net.minecraft.server.world.ServerWorld w) {
+      int now = PvpBotMod.globalTick;
+      java.util.function.Predicate<BlockState> isLog = st -> st.isIn(net.minecraft.registry.tag.BlockTags.LOGS);
+      BlockPos t = findBlock(w, bot, isLog, 24, 3, 3, s.bad, false);
+      if (t == null && now >= s.nextWide) {
+         s.nextWide = now + 60;
+         t = findBlock(w, bot, isLog, 48, 3, 3, s.bad, false);
+      }
+
+      if (t != null) {
+         if (!safeToMine(w, t, bot)) {
+            s.bad.add(t.asLong());
+            return;
+         }
+
+         startMine(server, name, s, bot, t);
+         return;
+      }
+
+      explore(server, name, s, bot, w, "no trees found");
+   }
+
+   static void gatherStone(MinecraftServer server, String name, Job s, ServerPlayerEntity bot, net.minecraft.server.world.ServerWorld w) {
+      int now = PvpBotMod.globalTick;
+      java.util.function.Predicate<BlockState> isStone = st -> st.isOf(Blocks.STONE);
+      BlockPos t = findBlock(w, bot, isStone, 12, 10, 10, s.bad, true);
+      if (t == null && s.digSteps == 0 && now >= s.nextWide) {
+         s.nextWide = now + 60;
+         t = findBlock(w, bot, isStone, 28, 10, 10, s.bad, true);
+      }
+
+      if (t != null) {
+         if (!safeToMine(w, t, bot)) {
+            s.bad.add(t.asLong());
+            return;
+         }
+
+         startMine(server, name, s, bot, t);
+         return;
+      }
+
+      digStep(server, name, s, bot, w);
+   }
+
+   /** no exposed stone around: dig a staircase down until there is some. */
+   static void digStep(MinecraftServer server, String name, Job s, ServerPlayerEntity bot, net.minecraft.server.world.ServerWorld w) {
+      int now = PvpBotMod.globalTick;
+      if (s.digSteps > 40 || bot.getY() < w.getBottomY() + 12 || s.digTurns > 8) {
+         s.digSteps = 0;
+         s.digTurns = 0;
+         s.digDir = null;
+         explore(server, name, s, bot, w, "no stone found");
+         return;
+      }
+
+      if (s.digDir == null) {
+         s.digDir = HORIZ[ThreadLocalRandom.current().nextInt(4)];
+      }
+
+      BlockPos feet = bot.getBlockPos();
+      BlockPos a = feet.offset(s.digDir);
+      BlockPos b = a.down();
+      BlockPos floor = b.down();
+      boolean ok = digSafe(w, a, bot) && digSafe(w, b, bot) && w.getBlockState(floor).isSolidBlock(w, floor) && w.getFluidState(floor).isEmpty();
+      if (!ok) {
+         s.digTurns++;
+         s.digDir = HORIZ[(java.util.Arrays.asList(HORIZ).indexOf(s.digDir) + 1) % 4];
+         return;
+      }
+
+      if (!w.getBlockState(a).isAir()) {
+         startMine(server, name, s, bot, a);
+         return;
+      }
+
+      if (!w.getBlockState(b).isAir()) {
+         startMine(server, name, s, bot, b);
+         return;
+      }
+
+      s.tgt = null;
+      s.exploreDest = b;
+      s.mode = M_WALK;
+      s.gj = null;
+      s.walkStart = now;
+      s.digSteps++;
+   }
+
+   static boolean digSafe(net.minecraft.server.world.ServerWorld w, BlockPos p, ServerPlayerEntity bot) {
+      if (!w.getFluidState(p).isEmpty()) {
+         return false;
+      }
+
+      return w.getBlockState(p).isAir() || safeToMine(w, p, bot);
+   }
+
+   /** walks a good distance in a mostly constant direction to find new trees or stone. */
+   static void explore(MinecraftServer server, String name, Job s, ServerPlayerEntity bot, net.minecraft.server.world.ServerWorld w, String why) {
+      int now = PvpBotMod.globalTick;
+      s.exploreHops++;
+      if (s.exploreHops > 30) {
+         finish(server, name, s, "gave up: " + why + " after a long search.");
+         return;
+      }
+
+      s.exploreAngle += (ThreadLocalRandom.current().nextDouble() - 0.5) * 1.2;
+      for (int tries = 0; tries < 6; tries++) {
+         double a = s.exploreAngle + tries * 0.9;
+         int x = (int)Math.floor(bot.getX() + Math.cos(a) * 26.0);
+         int z = (int)Math.floor(bot.getZ() + Math.sin(a) * 26.0);
+         if (!w.isChunkLoaded(x >> 4, z >> 4)) {
+            continue;
+         }
+
+         int y = w.getTopY(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, x, z);
+         BlockPos d = new BlockPos(x, y, z);
+         if (s.bad.contains(d.asLong()) || !w.getFluidState(d.down()).isEmpty()) {
+            continue;
+         }
+
+         s.exploreDest = d;
+         s.tgt = null;
+         s.mode = M_WALK;
+         s.gj = null;
+         s.walkStart = now;
+         Fighting.flogName(name, "survive: " + why + ", exploring toward " + x + " " + y + " " + z);
+         return;
+      }
+
+      s.nextThink = now + 40;
+   }
+
+   static BlockPos findBlock(
+      net.minecraft.server.world.ServerWorld w,
+      ServerPlayerEntity bot,
+      java.util.function.Predicate<BlockState> match,
+      int rad,
+      int up,
+      int down,
+      java.util.Set<Long> bad,
+      boolean exposedOnly
+   ) {
+      BlockPos c = bot.getBlockPos();
+      BlockPos.Mutable m = new BlockPos.Mutable();
+      BlockPos best = null;
+      double bd = Double.MAX_VALUE;
+      for (int dx = -rad; dx <= rad; dx++) {
+         for (int dz = -rad; dz <= rad; dz++) {
+            int x = c.getX() + dx;
+            int z = c.getZ() + dz;
+            if (!w.isChunkLoaded(x >> 4, z >> 4)) {
+               continue;
+            }
+
+            for (int dy = -down; dy <= up; dy++) {
+               m.set(x, c.getY() + dy, z);
+               if (!match.test(w.getBlockState(m)) || bad.contains(m.asLong())) {
+                  continue;
+               }
+
+               double d = dx * dx + dz * dz + dy * dy * 2.5;
+               if (d >= bd) {
+                  continue;
+               }
+
+               if (exposedOnly && !exposed(w, m)) {
+                  continue;
+               }
+
+               bd = d;
+               best = m.toImmutable();
+            }
+         }
+      }
+
+      return best;
+   }
+
+   static boolean exposed(net.minecraft.server.world.ServerWorld w, BlockPos p) {
+      for (net.minecraft.util.math.Direction d : net.minecraft.util.math.Direction.values()) {
+         if (w.getBlockState(p.offset(d)).isAir()) {
+            return true;
+         }
+      }
+
+      return false;
+   }
+
+   static boolean safeToMine(net.minecraft.server.world.ServerWorld w, BlockPos p, ServerPlayerEntity bot) {
+      BlockState st = w.getBlockState(p);
+      if (st.isAir() || st.getHardness(w, p) < 0.0F || st.getHardness(w, p) > 20.0F || w.getBlockEntity(p) != null) {
+         return false;
+      }
+
+      BlockPos under = bot.getBlockPos().down();
+      if (p.equals(under)) {
+         return false;
+      }
+
+      for (net.minecraft.util.math.Direction d : net.minecraft.util.math.Direction.values()) {
+         if (!w.getFluidState(p.offset(d)).isEmpty()) {
+            return false;
+         }
+      }
+
+      return true;
+   }
+
+   // ------------------------------------------------------------------ walking
+
+   /** 0 = still walking, 1 = arrived, -1 = no way there. */
+   static int walk(MinecraftServer server, String name, Job s, ServerPlayerEntity bot, BlockPos dest) {
+      int now = PvpBotMod.globalTick;
+      if (s.gj == null || !s.gj.target.equals(dest)) {
+         s.gj = new PvpBotMod.GotoJob(dest);
+         s.gjFails = 0;
+         BotSupport.run(server, "player " + name + " stop");
+         BotSupport.run(server, "player " + name + " autojump false");
+      }
+
+      PvpBotMod.GotoJob g = s.gj;
+      if (now % 5 == 0) {
+         double mx = bot.getX() - g.lastX;
+         double mz = bot.getZ() - g.lastZ;
+         if (!Double.isNaN(g.lastX) && g.path != null && !Fighting.gotoReached(g, bot) && mx * mx + mz * mz < 0.0036) {
+            g.pathStuck += 5;
+         } else {
+            g.pathStuck = 0;
+         }
+
+         g.lastX = bot.getX();
+         g.lastZ = bot.getZ();
+      }
+
+      if (Fighting.gotoReached(g, bot)) {
+         BotSupport.run(server, "player " + name + " stop");
+         return 1;
+      }
+
+      boolean needPlan = g.path == null || g.pathIdx >= g.path.size() || now >= g.nextPathTick || g.pathStuck >= 15;
+      if (needPlan && PvpBotMod.gotoBudgetLeft >= 60) {
+         boolean ok = Fighting.planGoto(g, bot);
+         if (ok) {
+            g.nextPathTick = now + Math.max(5, PvpBotMod.PATH_REPLAN.asInt());
+         } else {
+            g.nextPathTick = now + 10;
+            g.pathStuck = 0;
+            s.gjFails++;
+         }
+      }
+
+      if (g.pathStuck >= 15) {
+         g.path = null;
+         g.pathIdx = 0;
+         g.pathMoving = false;
+         g.pathStuck = 0;
+         s.gjFails++;
+      }
+
+      if (s.gjFails >= 4) {
+         BotSupport.run(server, "player " + name + " stop");
+         return -1;
+      }
+
+      Fighting.gotoPathStep(server, name, g, bot);
+      return 0;
+   }
+
+   static boolean reach(ServerPlayerEntity bot, BlockPos t) {
+      double dx = t.getX() + 0.5 - bot.getX();
+      double dy = t.getY() + 0.5 - bot.getEyeY();
+      double dz = t.getZ() + 0.5 - bot.getZ();
+      return dx * dx + dy * dy + dz * dz <= 4.3 * 4.3;
+   }
+
+   static void walkTick(MinecraftServer server, String name, Job s, ServerPlayerEntity bot, net.minecraft.server.world.ServerWorld w) {
+      int now = PvpBotMod.globalTick;
+      BlockPos dest = s.tgt != null ? s.tgt : s.exploreDest;
+      if (dest == null) {
+         s.mode = M_THINK;
+         return;
+      }
+
+      if (s.tgt != null) {
+         if (w.getBlockState(s.tgt).isAir()) {
+            s.tgt = null;
+            s.gj = null;
+            s.mode = M_THINK;
+            return;
+         }
+
+         if (reach(bot, s.tgt)) {
+            BotSupport.run(server, "player " + name + " stop");
+            s.mode = M_MINE;
+            s.mineStage = 0;
+            s.mineProg = 0;
+            s.gj = null;
+            return;
+         }
+      }
+
+      int r = walk(server, name, s, bot, dest);
+      boolean timeout = now - s.walkStart > 900;
+      if (r == 1 && s.tgt == null) {
+         s.exploreDest = null;
+         s.gj = null;
+         s.mode = M_THINK;
+         s.nextThink = now + 2;
+         return;
+      }
+
+      if (r != 0 || timeout) {
+         if (s.tgt != null) {
+            s.bad.add(s.tgt.asLong());
+         } else if (s.exploreDest != null) {
+            s.bad.add(s.exploreDest.asLong());
+         }
+
+         s.tgt = null;
+         s.exploreDest = null;
+         s.gj = null;
+         s.mode = M_THINK;
+         BotSupport.run(server, "player " + name + " stop");
+      }
+   }
+
+   // ------------------------------------------------------------------ mining
+
+   static void startMine(MinecraftServer server, String name, Job s, ServerPlayerEntity bot, BlockPos t) {
+      s.tgt = t;
+      s.mineStage = 0;
+      s.mineProg = 0;
+      s.mineNeed = 0;
+      s.walkStart = PvpBotMod.globalTick;
+      s.gj = null;
+      if (reach(bot, t)) {
+         BotSupport.run(server, "player " + name + " stop");
+         s.mode = M_MINE;
+      } else {
+         s.mode = M_WALK;
+      }
+   }
+
+   static void mineTick(MinecraftServer server, String name, Job s, ServerPlayerEntity bot, net.minecraft.server.world.ServerWorld w) {
+      int now = PvpBotMod.globalTick;
+      BlockPos t = s.tgt;
+      if (t == null) {
+         s.mode = M_THINK;
+         return;
+      }
+
+      BlockState st = w.getBlockState(t);
+      if (st.isAir() || !w.getFluidState(t).isEmpty()) {
+         s.tgt = null;
+         s.mode = M_THINK;
+         s.nextThink = now + 1;
+         return;
+      }
+
+      if (!reach(bot, t)) {
+         s.mode = M_WALK;
+         s.gj = null;
+         return;
+      }
+
+      if (s.mineStage == 0) {
+         equipBest(server, name, bot, st);
+         s.mineStage = 1;
+         BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(t.getX() + 0.5) + " " + BotSupport.fmt(t.getY() + 0.5) + " " + BotSupport.fmt(t.getZ() + 0.5));
+         return;
+      }
+
+      if (s.mineStage == 1) {
+         float delta = st.calcBlockBreakingDelta(bot, w, t);
+         if (delta <= 0.0F) {
+            s.bad.add(t.asLong());
+            s.tgt = null;
+            s.mode = M_THINK;
+            return;
+         }
+
+         s.mineNeed = Math.max(1, (int)Math.ceil(1.0 / delta));
+         s.mineStage = 2;
+         s.mineProg = 0;
+      }
+
+      if (now % 4 == 0) {
+         BotSupport.run(server, "player " + name + " look at " + BotSupport.fmt(t.getX() + 0.5) + " " + BotSupport.fmt(t.getY() + 0.5) + " " + BotSupport.fmt(t.getZ() + 0.5));
+         bot.swingHand(Hand.MAIN_HAND);
+      }
+
+      s.mineProg++;
+      if (s.mineProg < s.mineNeed) {
+         return;
+      }
+
+      ItemStack tool = bot.getMainHandStack();
+      boolean canDrop = !st.isToolRequired() || tool.isSuitableFor(st);
+      w.breakBlock(t, canDrop, bot);
+      if (!tool.isEmpty() && tool.isDamageable()) {
+         tool.damage(1, bot, EquipmentSlot.MAINHAND);
+      }
+
+      vacuum(w, bot, t);
+      s.tgt = null;
+      s.mode = M_THINK;
+      s.nextThink = now + 1;
+   }
+
+   /** puts the fastest suitable tool in the hand for this block. */
+   static void equipBest(MinecraftServer server, String name, ServerPlayerEntity bot, BlockState st) {
+      PlayerInventory inv = bot.getInventory();
+      int best = -1;
+      float bestSpeed = 1.0F;
+      for (int i = 0; i < 36; i++) {
+         ItemStack it = inv.getStack(i);
+         if (it.isEmpty()) {
+            continue;
+         }
+
+         if (st.isToolRequired() && !it.isSuitableFor(st)) {
+            continue;
+         }
+
+         float sp = it.getMiningSpeedMultiplier(st);
+         if (sp > bestSpeed) {
+            bestSpeed = sp;
+            best = i;
+         }
+      }
+
+      if (best >= 0) {
+         int slot = BotSupport.toHotbar(bot, best, -1);
+         if (slot >= 0) {
+            BotSupport.run(server, "player " + name + " hotbar " + (slot + 1));
+         }
+      }
+   }
+
+   static void vacuum(net.minecraft.server.world.ServerWorld w, ServerPlayerEntity bot, BlockPos t) {
+      for (ItemEntity ie : w.getNonSpectatingEntities(ItemEntity.class, new Box(t).expand(1.5))) {
+         ItemStack st = ie.getStack();
+         if (st.isEmpty()) {
+            continue;
+         }
+
+         bot.getInventory().insertStack(st);
+         if (st.isEmpty()) {
+            ie.discard();
+         }
+      }
+   }
+
+   // ------------------------------------------------------------------ crafting
+
+   static boolean craftWood(net.minecraft.server.world.ServerWorld w, ServerPlayerEntity bot) {
+      boolean needP = bestTier(bot, ItemTags.PICKAXES) < 1;
+      boolean needA = bestTier(bot, ItemTags.AXES) < 1;
+      boolean needS = bestTier(bot, ItemTags.SWORDS) < 1;
+      int planks = (needP ? 3 : 0) + (needA ? 3 : 0) + (needS ? 2 : 0);
+      int sticks = (needP ? 2 : 0) + (needA ? 2 : 0) + (needS ? 1 : 0);
+      return craftTools(w, bot, 1, needP, needA, needS, planks, sticks);
+   }
+
+   static boolean craftStone(net.minecraft.server.world.ServerWorld w, ServerPlayerEntity bot) {
+      boolean needP = bestTier(bot, ItemTags.PICKAXES) < 2;
+      boolean needA = bestTier(bot, ItemTags.AXES) < 2;
+      boolean needS = bestTier(bot, ItemTags.SWORDS) < 2;
+      boolean needF = count(bot, st -> st.isOf(Items.FURNACE)) < 1;
+      int cobble = (needP ? 3 : 0) + (needA ? 3 : 0) + (needS ? 2 : 0) + (needF ? 8 : 0);
+      int sticks = (needP ? 2 : 0) + (needA ? 2 : 0) + (needS ? 1 : 0);
+      if (count(bot, Survival::isCobble) < cobble) {
+         return false;
+      }
+
+      return craftTools(w, bot, 2, needP, needA, needS, cobble, sticks) && (!needF || craftFurnace(bot));
+   }
+
+   static boolean craftFurnace(ServerPlayerEntity bot) {
+      if (!take(bot, Survival::isCobble, 8)) {
+         return false;
+      }
+
+      give(bot, new ItemStack(Items.FURNACE, 1));
+      return true;
+   }
+
+   /** tier 1 (wood): material = planks, tier 2 (stone): material = cobblestone. crafts what is missing next to a crafting table. */
+   static boolean craftTools(
+      net.minecraft.server.world.ServerWorld w, ServerPlayerEntity bot, int tier, boolean needP, boolean needA, boolean needS, int material, int sticks
+   ) {
+      boolean tableNear = tableNear(w, bot);
+      boolean needTable = !tableNear && count(bot, st -> st.isOf(Items.CRAFTING_TABLE)) < 1;
+      int haveSticks = count(bot, st -> st.isOf(Items.STICK));
+      int stickCrafts = haveSticks >= sticks ? 0 : (sticks - haveSticks + 3) / 4;
+      int planksNeeded = stickCrafts * 2 + (needTable ? 4 : 0) + (tier == 1 ? material : 0);
+      if (!ensurePlanks(bot, planksNeeded)) {
+         return false;
+      }
+
+      if (tier == 2 && count(bot, Survival::isCobble) < material) {
+         return false;
+      }
+
+      if (stickCrafts > 0) {
+         take(bot, Survival::isPlanks, stickCrafts * 2);
+         give(bot, new ItemStack(Items.STICK, stickCrafts * 4));
+      }
+
+      if (needTable) {
+         take(bot, Survival::isPlanks, 4);
+         give(bot, new ItemStack(Items.CRAFTING_TABLE, 1));
+      }
+
+      BlockPos placed = null;
+      if (!tableNear) {
+         placed = placeTable(w, bot);
+         if (placed == null) {
+            return false;
+         }
+
+         take(bot, st -> st.isOf(Items.CRAFTING_TABLE), 1);
+      }
+
+      if (needP) {
+         makeTool(bot, tier, 3, 2, tier == 1 ? Items.WOODEN_PICKAXE : Items.STONE_PICKAXE);
+      }
+
+      if (needA) {
+         makeTool(bot, tier, 3, 2, tier == 1 ? Items.WOODEN_AXE : Items.STONE_AXE);
+      }
+
+      if (needS) {
+         makeTool(bot, tier, 2, 1, tier == 1 ? Items.WOODEN_SWORD : Items.STONE_SWORD);
+      }
+
+      if (placed != null) {
+         w.setBlockState(placed, Blocks.AIR.getDefaultState(), 3);
+         give(bot, new ItemStack(Items.CRAFTING_TABLE, 1));
+      }
+
+      bot.swingHand(Hand.MAIN_HAND);
+      return true;
+   }
+
+   static void makeTool(ServerPlayerEntity bot, int tier, int mat, int sticks, Item result) {
+      if (tier == 1) {
+         take(bot, Survival::isPlanks, mat);
+      } else {
+         take(bot, Survival::isCobble, mat);
+      }
+
+      take(bot, st -> st.isOf(Items.STICK), sticks);
+      give(bot, new ItemStack(result, 1));
+   }
+
+   static boolean ensurePlanks(ServerPlayerEntity bot, int n) {
+      PlayerInventory inv = bot.getInventory();
+      for (int guard = 0; guard < 40; guard++) {
+         if (count(bot, Survival::isPlanks) >= n) {
+            return true;
+         }
+
+         int li = -1;
+         for (int i = 0; i < 36; i++) {
+            ItemStack st = inv.getStack(i);
+            if (!st.isEmpty() && st.isIn(ItemTags.LOGS) && Fighting.planksFor(st.getItem()) != null) {
+               li = i;
+               break;
+            }
+         }
+
+         if (li < 0) {
+            return false;
+         }
+
+         ItemStack log = inv.getStack(li);
+         Item pl = Fighting.planksFor(log.getItem());
+         log.decrement(1);
+         give(bot, new ItemStack(pl, 4));
+      }
+
+      return count(bot, Survival::isPlanks) >= n;
+   }
+
+   static boolean tableNear(net.minecraft.server.world.ServerWorld w, ServerPlayerEntity bot) {
+      BlockPos c = bot.getBlockPos();
+      for (BlockPos p : BlockPos.iterate(c.add(-4, -2, -4), c.add(4, 2, 4))) {
+         if (w.getBlockState(p).isOf(Blocks.CRAFTING_TABLE)) {
+            return true;
+         }
+      }
+
+      return false;
+   }
+
+   static BlockPos placeTable(net.minecraft.server.world.ServerWorld w, ServerPlayerEntity bot) {
+      BlockPos c = bot.getBlockPos();
+      for (int r = 1; r <= 2; r++) {
+         for (int dx = -r; dx <= r; dx++) {
+            for (int dz = -r; dz <= r; dz++) {
+               if (Math.max(Math.abs(dx), Math.abs(dz)) != r) {
+                  continue;
+               }
+
+               BlockPos p = c.add(dx, 0, dz);
+               BlockPos below = p.down();
+               if (w.getBlockState(p).isAir() && w.getBlockState(p.up()).isAir() && w.getBlockState(below).isSolidBlock(w, below) && w.getFluidState(p).isEmpty()) {
+                  w.setBlockState(p, Blocks.CRAFTING_TABLE.getDefaultState(), 3);
+                  return p;
+               }
+            }
+         }
+      }
+
+      return null;
+   }
+
+   // ------------------------------------------------------------------ inventory helpers
+
+   static boolean isPlanks(ItemStack st) {
+      return st.isIn(ItemTags.PLANKS);
+   }
+
+   static boolean isLog(ItemStack st) {
+      return st.isIn(ItemTags.LOGS);
+   }
+
+   static boolean isCobble(ItemStack st) {
+      return st.isOf(Items.COBBLESTONE) || st.isOf(Items.COBBLED_DEEPSLATE) || st.isOf(Items.BLACKSTONE);
+   }
+
+   static int count(ServerPlayerEntity bot, java.util.function.Predicate<ItemStack> p) {
+      PlayerInventory inv = bot.getInventory();
+      int n = 0;
+      for (int i = 0; i < 36; i++) {
+         ItemStack st = inv.getStack(i);
+         if (!st.isEmpty() && p.test(st)) {
+            n += st.getCount();
+         }
+      }
+
+      return n;
+   }
+
+   static boolean take(ServerPlayerEntity bot, java.util.function.Predicate<ItemStack> p, int n) {
+      if (count(bot, p) < n) {
+         return false;
+      }
+
+      PlayerInventory inv = bot.getInventory();
+      for (int i = 0; i < 36 && n > 0; i++) {
+         ItemStack st = inv.getStack(i);
+         if (!st.isEmpty() && p.test(st)) {
+            int t = Math.min(n, st.getCount());
+            st.decrement(t);
+            n -= t;
+         }
+      }
+
+      return true;
+   }
+
+   static void give(ServerPlayerEntity bot, ItemStack st) {
+      bot.getInventory().insertStack(st);
+      if (!st.isEmpty()) {
+         net.minecraft.server.world.ServerWorld w = BotSupport.sw(bot);
+         w.spawnEntity(new ItemEntity(w, bot.getX(), bot.getY() + 0.5, bot.getZ(), st));
+      }
+   }
+
+   /** 0 = no tool, 1 wood/gold, 2 stone, 3 iron, 4 diamond, 5 netherite. */
+   static int tierOf(ItemStack st) {
+      if (st.isEmpty()) {
+         return 0;
+      }
+
+      String p = Registries.ITEM.getId(st.getItem()).getPath();
+      if (p.startsWith("wooden_") || p.startsWith("golden_")) {
+         return 1;
+      } else if (p.startsWith("stone_")) {
+         return 2;
+      } else if (p.startsWith("iron_")) {
+         return 3;
+      } else if (p.startsWith("diamond_")) {
+         return 4;
+      } else {
+         return p.startsWith("netherite_") ? 5 : 0;
+      }
+   }
+
+   static int bestTier(ServerPlayerEntity bot, net.minecraft.registry.tag.TagKey<Item> tag) {
+      PlayerInventory inv = bot.getInventory();
+      int best = 0;
+      for (int i = 0; i < 36; i++) {
+         ItemStack st = inv.getStack(i);
+         if (!st.isEmpty() && st.isIn(tag)) {
+            best = Math.max(best, tierOf(st));
+         }
+      }
+
+      return best;
    }
 }
