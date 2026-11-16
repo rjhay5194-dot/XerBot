@@ -470,15 +470,15 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt CHASE_HOP_COOLDOWN = opt("chasehopcooldown", "chase_hop_cooldown", 30.0, 10.0, 200.0, false, "ticks between chase hops");
 
    static final PvpBotMod.Opt CRYSTAL = opt("crystal", "crystal", 1.0, 0.0, 1.0, true, "crystal PvP: when the bot has end crystals + obsidian it places obsidian beside itself and spams crystals on the target (high ground, flat ground, anchor combo, pearl chase)");
-   static final PvpBotMod.Opt CRYSTAL_CHANCE = opt("crystalchance", "crystal_chance", 60.0, 0.0, 100.0, false, "percent chance each check (every quarter second while the target is within 6 blocks) to start crystal PvP");
+   static final PvpBotMod.Opt CRYSTAL_CHANCE = opt("crystalchance", "crystal_chance", 100.0, 0.0, 100.0, false, "percent chance each check (every quarter second while the target is within 6 blocks) to start crystal PvP");
    static final PvpBotMod.Opt CRYSTAL_PLACE_DELAY = opt("crystalplacedelay", "crystal_place_delay", 2.0, 1.0, 20.0, false, "ticks between aiming and placing each crystal");
    static final PvpBotMod.Opt CRYSTAL_BREAK_DELAY = opt("crystalbreakdelay", "crystal_break_delay", 2.0, 1.0, 20.0, false, "ticks between seeing the crystal and breaking it");
    static final PvpBotMod.Opt CRYSTAL_MAX_SELF = opt("crystalmaxself", "crystal_max_self_damage", 8.0, 1.0, 20.0, false, "health points: the bot never places a crystal / detonates an anchor that would hurt it more than this (vanilla damage formula)");
    static final PvpBotMod.Opt CRYSTAL_MIN_HP = opt("crystalminhp", "crystal_min_health", 10.0, 2.0, 20.0, false, "health points: crystal PvP does not start below this and stops at half of it");
-   static final PvpBotMod.Opt CRYSTAL_COOLDOWN = opt("crystalcooldown", "crystal_cooldown", 100.0, 0.0, 2000.0, false, "ticks before the bot starts crystal PvP again");
+   static final PvpBotMod.Opt CRYSTAL_COOLDOWN = opt("crystalcooldown", "crystal_cooldown", 10.0, 0.0, 2000.0, false, "ticks before the bot starts crystal PvP again");
    static final PvpBotMod.Opt CRYSTAL_PEARL_KNOCK = opt("crystalpearl", "crystal_pearl_knock", 80.0, 0.0, 100.0, false, "percent chance the bot ender pearls to a target the crystal explosions knocked away, hits it and goes back to crystals");
-   static final PvpBotMod.Opt ANCHOR_CHANCE = opt("anchorchance", "anchor_chance", 50.0, 0.0, 100.0, false, "on flat open ground (outside the Nether) percent chance to do the anchor combo: anchor, glowstone, obsidian shield, detonate with a sword");
-   static final PvpBotMod.Opt ANCHOR_COOLDOWN = opt("anchorcooldown", "anchor_cooldown", 300.0, 20.0, 6000.0, false, "ticks before the bot does the anchor combo again");
+   static final PvpBotMod.Opt ANCHOR_CHANCE = opt("anchorchance", "anchor_chance", 100.0, 0.0, 100.0, false, "on flat open ground (outside the Nether) percent chance to do the anchor combo: anchor, glowstone, obsidian shield, detonate with a sword");
+   static final PvpBotMod.Opt ANCHOR_COOLDOWN = opt("anchorcooldown", "anchor_cooldown", 60.0, 20.0, 6000.0, false, "ticks before the bot does the anchor combo again");
    static final PvpBotMod.Opt TOTEM_SWAP_DELAY = opt("totemswapdelay", "totem_swap_delay", 8.0, 0.0, 40.0, false, "ticks the bot waits (plus up to half again at random) before moving a totem to the offhand, also after a pop; 0 = instant");
    static final PvpBotMod.Opt HEAL_BUILD = opt("healbuild", "heal_build", 1.0, 0.0, 1.0, true, "before healing the bot may build a block shelter around itself (open at the back) and eat inside it");
    static final PvpBotMod.Opt HEAL_BUILD_CHANCE = opt("healbuildchance", "heal_build_chance", 30.0, 0.0, 100.0, false, "percent chance a heal starts with building");
@@ -2952,6 +2952,7 @@ public class PvpBotMod implements ModInitializer {
       int crouchUntil;
       int cryStage, cryMode, cryStart, cryNext, cryCool, cryFails, cryCount, cryPearlNext, cryAnchorCool, cryFound, cryWait;
       BlockPos cryBase, cryAnchor, cryGuard;
+      boolean cryWalking;
       Vec3d cryFrom;
       final java.util.List<BlockPos> hbCells = new java.util.ArrayList<>();
       final java.util.List<BlockPos> fortCells = new java.util.ArrayList<>();
@@ -7559,11 +7560,12 @@ final class Fighting {
       net.minecraft.server.world.ServerWorld w = BotSupport.sw(bot);
       BlockPos feet = bot.getBlockPos();
       int floor = 0;
+      int blocked = 0;
       for (int dx = -2; dx <= 2; dx++) {
          for (int dz = -2; dz <= 2; dz++) {
             BlockPos c = feet.add(dx, 0, dz);
             if (!w.getBlockState(c).isAir() || !w.getBlockState(c.up()).isAir()) {
-               return false;
+               blocked++;
             }
 
             if (cryFloor(w, c)) {
@@ -7572,7 +7574,7 @@ final class Fighting {
          }
       }
 
-      return floor >= 22;
+      return blocked <= 3 && floor >= 16;
    }
 
    /** anchor spot: A two cells ahead (cardinal toward the target), O (obsidian shield) between. Returns {A, O} or null. */
@@ -7656,13 +7658,9 @@ final class Fighting {
       double dy = target.getY() - bot.getY();
       boolean high = dy >= 0.6 && dy <= 1.6;
       int mode = high ? 1 : 4;
-      if (!high && Math.abs(dy) < 0.6 && now >= f.cryAnchorCool && chance(PvpBotMod.ANCHOR_CHANCE.value) && cryFlat(bot)
+      if (!high && Math.abs(dy) < 0.9 && now >= f.cryAnchorCool && chance(PvpBotMod.ANCHOR_CHANCE.value) && cryFlat(bot)
          && crystalBegin(server, name, f, bot, target, 3) == null) {
          return true;
-      }
-
-      if (!high && Math.abs(dy) > 0.6) {
-         return false;
       }
 
       if (crystalBegin(server, name, f, bot, target, mode) != null) {
@@ -7692,7 +7690,35 @@ final class Fighting {
       } else if (bot.getHealth() + bot.getAbsorptionAmount() < PvpBotMod.CRYSTAL_MIN_HP.value * 0.5 || BotSupport.findItemIndex(bot, Items.END_CRYSTAL) < 0 && f.cryStage < 20) {
          crystalEnd(server, name, f, "low health or out of crystals");
          return;
-      } else if (now < f.cryNext) {
+      }
+
+      if (f.cryAnchor != null && f.cryStage >= 30 && f.cryStage <= 37) {
+         // aim lock: every tick keep the crosshair on the anchor / shield cell, and walk back to it if the bot got knocked out of reach
+         BlockPos ap = f.cryAnchor;
+         BlockPos gp = f.cryGuard;
+         double ax = ap.getX() + 0.5;
+         double az = ap.getZ() + 0.5;
+         if (f.cryStage <= 31) {
+            cryLook(server, name, ax, ap.getY(), az);
+         } else if (f.cryStage <= 33) {
+            cryLook(server, name, ax, ap.getY() + 0.5, az);
+         } else if (f.cryStage <= 36 && gp != null && !(f.cryStage == 36 && f.cryFound == -2)) {
+            cryLook(server, name, gp.getX() + 0.5, gp.getY(), gp.getZ() + 0.5);
+         } else {
+            cryLook(server, name, ax, ap.getY() + 1.0, az);
+         }
+
+         double ad = Math.sqrt(bot.squaredDistanceTo(ax, ap.getY() + 0.5, az));
+         if (ad > 4.2) {
+            BotSupport.run(server, "player " + name + " move forward");
+            f.cryWalking = true;
+         } else if (f.cryWalking) {
+            BotSupport.run(server, "player " + name + " stop");
+            f.cryWalking = false;
+         }
+      }
+
+      if (now < f.cryNext) {
          return;
       }
 
@@ -7942,12 +7968,12 @@ final class Fighting {
 
             cryLook(server, name, f.cryAnchor.getX() + 0.5, f.cryAnchor.getY(), f.cryAnchor.getZ() + 0.5);
             f.cryStage = 31;
-            f.cryNext = now + 2;
+            f.cryNext = now + 1;
             return;
          case 31:
             BotSupport.useOnce(server, name, f);
             f.cryStage = 32;
-            f.cryNext = now + 2;
+            f.cryNext = now + 1;
             return;
          case 32:
             if (!w.getBlockState(f.cryAnchor).isOf(Blocks.RESPAWN_ANCHOR)) {
@@ -7963,12 +7989,12 @@ final class Fighting {
 
             cryLook(server, name, f.cryAnchor.getX() + 0.5, f.cryAnchor.getY() + 0.5, f.cryAnchor.getZ() + 0.5);
             f.cryStage = 33;
-            f.cryNext = now + 2;
+            f.cryNext = now + 1;
             return;
          case 33:
             BotSupport.useOnce(server, name, f);
             f.cryStage = 34;
-            f.cryNext = now + 2;
+            f.cryNext = now + 1;
             return;
          case 34: {
             if (!w.getBlockState(f.cryAnchor).isOf(Blocks.RESPAWN_ANCHOR)
@@ -7990,13 +8016,13 @@ final class Fighting {
 
             cryLook(server, name, f.cryGuard.getX() + 0.5, f.cryGuard.getY(), f.cryGuard.getZ() + 0.5);
             f.cryStage = 35;
-            f.cryNext = now + 2;
+            f.cryNext = now + 1;
             return;
          }
          case 35:
             BotSupport.useOnce(server, name, f);
             f.cryStage = 36;
-            f.cryNext = now + 2;
+            f.cryNext = now + 1;
             return;
          case 36: {
             if (!w.getBlockState(f.cryGuard).isOf(Blocks.OBSIDIAN)) {
@@ -8028,15 +8054,23 @@ final class Fighting {
 
             cryLook(server, name, f.cryAnchor.getX() + 0.5, f.cryAnchor.getY() + 1.0, f.cryAnchor.getZ() + 0.5);
             f.cryStage = 37;
-            f.cryNext = now + 2;
+            f.cryNext = now + 1;
             return;
          }
          case 37:
             BotSupport.useOnce(server, name, f);
             flog(f, "crystal pvp: anchor detonated behind the obsidian");
             f.cryMode = 4;
-            f.cryStage = dist <= 3.3 ? 6 : 0;
-            f.cryNext = now + 3;
+            f.cryAnchor = null;
+            if (BotSupport.findItemIndex(bot, Items.ENDER_PEARL) >= 0 && !Double.isNaN(pearlPitch(bot, target))) {
+               f.cryStage = 20;
+               f.cryNext = now + 1;
+               flog(f, "crystal pvp: pearling straight after the anchor, then crystals");
+            } else {
+               f.cryStage = dist <= 3.3 ? 6 : 0;
+               f.cryNext = now + 2;
+            }
+
             return;
          default:
             crystalEnd(server, name, f, "unknown stage");
@@ -18881,11 +18915,11 @@ final class Tiers {
             break;
          case "vanilla":
             // crystal pvp: faster place / break, more pearl chases and anchor combos, quicker totem swaps
-            ex(m, PvpBotMod.CRYSTAL_CHANCE, 30, 95, q);
+            ex(m, PvpBotMod.CRYSTAL_CHANCE, 80, 100, q);
             ex(m, PvpBotMod.CRYSTAL_PLACE_DELAY, 5, 1, q);
             ex(m, PvpBotMod.CRYSTAL_BREAK_DELAY, 5, 1, q);
             ex(m, PvpBotMod.CRYSTAL_PEARL_KNOCK, 30, 95, q);
-            ex(m, PvpBotMod.ANCHOR_CHANCE, 20, 75, q);
+            ex(m, PvpBotMod.ANCHOR_CHANCE, 70, 100, q);
             ex(m, PvpBotMod.TOTEM_SWAP_DELAY, 16, 3, q);
             break;
          case "smp":
