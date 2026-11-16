@@ -469,6 +469,9 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt CHASE_HOP_CHANCE = opt("chasehopchance", "chase_hop_chance", 70.0, 0.0, 100.0, false, "percent chance each time the cooldown ends");
    static final PvpBotMod.Opt CHASE_HOP_COOLDOWN = opt("chasehopcooldown", "chase_hop_cooldown", 30.0, 10.0, 200.0, false, "ticks between chase hops");
 
+   static final PvpBotMod.Opt AUTO_REC = opt("autorecord", "auto_record", 0.0, 0.0, 1.0, true, "automatically record every fight to a replay file (pvpbot_replays folder) while any bot is fighting");
+   static final PvpBotMod.Opt REC_MAX_MIN = opt("recordmax", "record_max_minutes", 10.0, 1.0, 60.0, false, "longest single recording in minutes");
+   static final PvpBotMod.Opt SPEC_HUD = opt("spechud", "spectator_hud", 1.0, 0.0, 1.0, true, "spectators of a bot or replay puppet see its health, food, armor and hotbar as a boss bar + action bar");
    static final PvpBotMod.Opt CRYSTAL = opt("crystal", "crystal", 1.0, 0.0, 1.0, true, "crystal PvP: when the bot has end crystals + obsidian it places obsidian beside itself and spams crystals on the target (high ground, flat ground, anchor combo, pearl chase)");
    static final PvpBotMod.Opt CRYSTAL_CHANCE = opt("crystalchance", "crystal_chance", 100.0, 0.0, 100.0, false, "percent chance each check (every quarter second while the target is within 6 blocks) to start crystal PvP");
    static final PvpBotMod.Opt CRYSTAL_PLACE_DELAY = opt("crystalplacedelay", "crystal_place_delay", 2.0, 1.0, 20.0, false, "ticks between aiming and placing each crystal");
@@ -1626,6 +1629,7 @@ public class PvpBotMod implements ModInitializer {
             .then(CommandManager.argument("seconds", IntegerArgumentType.integer(5, 3600)).executes(ctx -> repairCmd(ctx, IntegerArgumentType.getInteger(ctx, "seconds"))))
       );
       root.then(Arena.node());
+      Replay.register(root);
       root.then(
          ((LiteralArgumentBuilder)CommandManager.literal("difficulty").executes(PvpBotMod::showDifficulty))
             .then(
@@ -5482,6 +5486,7 @@ final class BotSupport {
       }
 
       Kits.tick(server);
+      Replay.tick(server);
       blockLogTick();
 
       if (!PvpBotMod.PENDING_CHESTS.isEmpty()) {
@@ -17357,7 +17362,7 @@ final class Gui {
    static final String DIFF_PAGE = "Difficulty";
    private static final String[] SETTINGS_ORDER = new String[]{
       "Combat", "Opening", "Sword Tech", "Human Mistakes", "Human", "Shield", "Eating", "Escape", "Webs", "Potions & Items",
-      "Restock", "Wind & Mace", "Mace Pressure", "Ranged", "Fall & Swap", "Elytra", "Pillar & Climb", "Pathfinding", "Team & FFA", "TNT Cart", "Crystal", "Tiers", "Debug"
+      "Restock", "Wind & Mace", "Mace Pressure", "Ranged", "Fall & Swap", "Elytra", "Pillar & Climb", "Pathfinding", "Team & FFA", "TNT Cart", "Crystal", "Replay", "Tiers", "Debug"
    };
    private static final String[] MODE_ORDER = new String[]{FFA_PAGE, TOUR_PAGE, ARENA_PAGE, TEAMS_PAGE, KITS_PAGE, TEST_PAGE};
 
@@ -17712,6 +17717,7 @@ final class Gui {
       cat("Auto Survival", "survivestop", "survivelogs", "survivestone", "survivefight", "survivethreatdist", "surviveloot", "survivemobs");
       catIcon("Auto Survival", Items.IRON_PICKAXE);
       cat("Crystal", "crystal", "crystalchance", "crystalplacedelay", "crystalbreakdelay", "crystalmaxself", "crystalminhp", "crystalcooldown", "crystalpearl", "anchorchance", "anchorcooldown", "totemswapdelay");
+      cat("Replay", "autorecord", "recordmax", "spechud");
       cat("Tiers", "nametagtiers");
       cat("TNT Cart", "tntcart", "tntcartchance", "tntcartneutral", "cartdefense", "cartdefensedist", "cartbreakchance", "cartdefensedelay", "cartmode", "cartfinishhp", "cartminhp", "cartpunish", "tntcartsafedist", "tntcartdrawticks", "tntcartcooldown", "xcartpreload", "xcartchance", "pearlcartchance", "cartdefensedelaymax", "cartdefensemiss", "walldef", "walldefchance");
       cat("Fall & Swap", "fallmace", "fallmacechance", "fallmaceheight", "fallclutch", "clutchheight", "clutchsuccess", "maceswap", "maceswapchance", "spearswap", "spearswapchance", "spearreach");
@@ -17852,6 +17858,7 @@ final class Gui {
       catIcon("Pillar & Climb", Items.LADDER);
       catIcon("TNT Cart", Items.TNT_MINECART);
       catIcon("Crystal", Items.END_CRYSTAL);
+      catIcon("Replay", Items.CLOCK);
       catIcon("Tiers", Items.NAME_TAG);
       catIcon("FFA & Loot", Items.CHEST);
       catIcon("Debug", Items.RECOVERY_COMPASS);
@@ -23974,5 +23981,1283 @@ final class Survival {
       }
 
       return best;
+   }
+}
+
+/**
+ * Bot recording + replay. The recorder samples every bot each tick (position, look, health, gear, actions), block changes around the bots and
+ * crystals / pearls; playback drives a puppet fake player (r_<name>) from the file, rebuilds the blocks and entities, and shows a text HUD to
+ * anyone spectating a bot or a puppet (the vanilla spectator screen cannot show the bot's own HUD, so it is drawn as a boss bar + action bar).
+ */
+final class Replay {
+   private Replay() {
+   }
+
+   static final int MAGIC = 0x50425232;
+   static final int F_SNEAK = 1, F_SPRINT = 2, F_SWING = 4, F_USE = 8, F_GLIDE = 16, F_GROUND = 32, F_BLOCK = 64;
+   static final int E_TOTEM = 1, E_HURT = 2, E_EAT = 3, E_EXPLODE = 4, E_DEATH = 5;
+   static final int GEAR_N = 15;
+
+   static final class Gear {
+      final String[] id = new String[GEAR_N];
+      final int[] n = new int[GEAR_N];
+      String sig = "";
+      int idx;
+   }
+
+   static final class Frame {
+      int t;
+      double x, y, z;
+      float yaw, pitch, hp, abs;
+      int food, armor, sel, flags;
+      Gear gear;
+   }
+
+   static final class Ev {
+      int t, bot, type;
+      String text = "";
+      float x, y, z;
+   }
+
+   static final class Blk {
+      int t;
+      long pos;
+      int oldRaw, newRaw;
+   }
+
+   static final class EntF {
+      int t;
+      int[] id;
+      int[] type;
+      float[] x, y, z;
+   }
+
+   static final class Rec {
+      String name = "";
+      String dim = "minecraft:overworld";
+      int ticks;
+      final java.util.List<String> bots = new java.util.ArrayList<>();
+      final java.util.List<java.util.List<Frame>> frames = new java.util.ArrayList<>();
+      final java.util.List<Gear> gears = new java.util.ArrayList<>();
+      final java.util.List<Ev> evs = new java.util.ArrayList<>();
+      final java.util.List<Blk> blks = new java.util.ArrayList<>();
+      final java.util.List<EntF> ents = new java.util.ArrayList<>();
+   }
+
+   // ------------------------------------------------------------------ files
+
+   static Path dir() {
+      return FabricLoader.getInstance().getConfigDir().resolve("pvpbot_replays");
+   }
+
+   static String clean(String s) {
+      String c = s.replaceAll("[^A-Za-z0-9_\\-]", "");
+      return c.isEmpty() ? null : (c.length() > 40 ? c.substring(0, 40) : c);
+   }
+
+   static java.util.List<String> names() {
+      java.util.List<String> out = new java.util.ArrayList<>();
+      try {
+         if (Files.isDirectory(dir())) {
+            try (java.util.stream.Stream<Path> s = Files.list(dir())) {
+               s.forEach(p -> {
+                  String n = p.getFileName().toString();
+                  if (n.endsWith(".rec")) {
+                     out.add(n.substring(0, n.length() - 4));
+                  }
+               });
+            }
+         }
+      } catch (IOException ignored) {
+      }
+
+      java.util.Collections.sort(out);
+      return out;
+   }
+
+   static void save(Rec r, Path p) throws IOException {
+      Files.createDirectories(p.getParent());
+      try (java.io.DataOutputStream o = new java.io.DataOutputStream(new java.io.BufferedOutputStream(new java.util.zip.GZIPOutputStream(Files.newOutputStream(p))))) {
+         o.writeInt(MAGIC);
+         o.writeUTF(r.dim);
+         o.writeInt(r.ticks);
+         o.writeInt(r.gears.size());
+         for (Gear g : r.gears) {
+            for (int i = 0; i < GEAR_N; i++) {
+               o.writeUTF(g.id[i] == null ? "" : g.id[i]);
+               o.writeInt(g.n[i]);
+            }
+         }
+
+         o.writeInt(r.bots.size());
+         for (int b = 0; b < r.bots.size(); b++) {
+            o.writeUTF(r.bots.get(b));
+            java.util.List<Frame> fl = r.frames.get(b);
+            o.writeInt(fl.size());
+            for (Frame f : fl) {
+               o.writeInt(f.t);
+               o.writeDouble(f.x);
+               o.writeDouble(f.y);
+               o.writeDouble(f.z);
+               o.writeFloat(f.yaw);
+               o.writeFloat(f.pitch);
+               o.writeFloat(f.hp);
+               o.writeFloat(f.abs);
+               o.writeByte(f.food);
+               o.writeByte(f.armor);
+               o.writeByte(f.sel);
+               o.writeInt(f.flags);
+               o.writeInt(f.gear.idx);
+            }
+         }
+
+         o.writeInt(r.evs.size());
+         for (Ev e : r.evs) {
+            o.writeInt(e.t);
+            o.writeInt(e.bot);
+            o.writeByte(e.type);
+            o.writeUTF(e.text);
+            o.writeFloat(e.x);
+            o.writeFloat(e.y);
+            o.writeFloat(e.z);
+         }
+
+         o.writeInt(r.blks.size());
+         for (Blk b : r.blks) {
+            o.writeInt(b.t);
+            o.writeLong(b.pos);
+            o.writeInt(b.oldRaw);
+            o.writeInt(b.newRaw);
+         }
+
+         o.writeInt(r.ents.size());
+         for (EntF e : r.ents) {
+            o.writeInt(e.t);
+            o.writeInt(e.id.length);
+            for (int i = 0; i < e.id.length; i++) {
+               o.writeInt(e.id[i]);
+               o.writeByte(e.type[i]);
+               o.writeFloat(e.x[i]);
+               o.writeFloat(e.y[i]);
+               o.writeFloat(e.z[i]);
+            }
+         }
+      }
+   }
+
+   static Rec load(Path p) throws IOException {
+      Rec r = new Rec();
+      try (java.io.DataInputStream in = new java.io.DataInputStream(new java.io.BufferedInputStream(new java.util.zip.GZIPInputStream(Files.newInputStream(p))))) {
+         if (in.readInt() != MAGIC) {
+            throw new IOException("not a pvpbot replay (or an older format)");
+         }
+
+         r.dim = in.readUTF();
+         r.ticks = in.readInt();
+         int gn = in.readInt();
+         for (int k = 0; k < gn; k++) {
+            Gear g = new Gear();
+            g.idx = k;
+            for (int i = 0; i < GEAR_N; i++) {
+               g.id[i] = in.readUTF();
+               g.n[i] = in.readInt();
+            }
+
+            r.gears.add(g);
+         }
+
+         int bn = in.readInt();
+         for (int b = 0; b < bn; b++) {
+            r.bots.add(in.readUTF());
+            int fn = in.readInt();
+            java.util.List<Frame> fl = new java.util.ArrayList<>(fn);
+            for (int k = 0; k < fn; k++) {
+               Frame f = new Frame();
+               f.t = in.readInt();
+               f.x = in.readDouble();
+               f.y = in.readDouble();
+               f.z = in.readDouble();
+               f.yaw = in.readFloat();
+               f.pitch = in.readFloat();
+               f.hp = in.readFloat();
+               f.abs = in.readFloat();
+               f.food = in.readByte();
+               f.armor = in.readByte();
+               f.sel = in.readByte();
+               f.flags = in.readInt();
+               int gi = in.readInt();
+               f.gear = gi >= 0 && gi < r.gears.size() ? r.gears.get(gi) : new Gear();
+               fl.add(f);
+            }
+
+            r.frames.add(fl);
+         }
+
+         int en = in.readInt();
+         for (int k = 0; k < en; k++) {
+            Ev e = new Ev();
+            e.t = in.readInt();
+            e.bot = in.readInt();
+            e.type = in.readByte();
+            e.text = in.readUTF();
+            e.x = in.readFloat();
+            e.y = in.readFloat();
+            e.z = in.readFloat();
+            r.evs.add(e);
+         }
+
+         int kn = in.readInt();
+         for (int k = 0; k < kn; k++) {
+            Blk b = new Blk();
+            b.t = in.readInt();
+            b.pos = in.readLong();
+            b.oldRaw = in.readInt();
+            b.newRaw = in.readInt();
+            r.blks.add(b);
+         }
+
+         int xn = in.readInt();
+         for (int k = 0; k < xn; k++) {
+            EntF e = new EntF();
+            e.t = in.readInt();
+            int c = in.readInt();
+            e.id = new int[c];
+            e.type = new int[c];
+            e.x = new float[c];
+            e.y = new float[c];
+            e.z = new float[c];
+            for (int i = 0; i < c; i++) {
+               e.id[i] = in.readInt();
+               e.type[i] = in.readByte();
+               e.x[i] = in.readFloat();
+               e.y[i] = in.readFloat();
+               e.z[i] = in.readFloat();
+            }
+
+            r.ents.add(e);
+         }
+      }
+
+      r.name = p.getFileName().toString().replace(".rec", "");
+      return r;
+   }
+
+   // ------------------------------------------------------------------ sampling
+
+   static Gear gearOf(ServerPlayerEntity b) {
+      Gear g = new Gear();
+      PlayerInventory inv = b.getInventory();
+      StringBuilder sb = new StringBuilder();
+      for (int i = 0; i < GEAR_N; i++) {
+         ItemStack st;
+         if (i < 9) {
+            st = inv.getStack(i);
+         } else if (i == 9) {
+            st = b.getEquippedStack(EquipmentSlot.OFFHAND);
+         } else if (i == 10) {
+            st = b.getEquippedStack(EquipmentSlot.HEAD);
+         } else if (i == 11) {
+            st = b.getEquippedStack(EquipmentSlot.CHEST);
+         } else if (i == 12) {
+            st = b.getEquippedStack(EquipmentSlot.LEGS);
+         } else if (i == 13) {
+            st = b.getEquippedStack(EquipmentSlot.FEET);
+         } else {
+            st = ItemStack.EMPTY;
+         }
+
+         g.id[i] = st.isEmpty() ? "" : Registries.ITEM.getId(st.getItem()).toString();
+         g.n[i] = st.isEmpty() ? 0 : st.getCount();
+         sb.append(g.id[i]).append('x').append(g.n[i]).append(';');
+      }
+
+      g.sig = sb.toString();
+      return g;
+   }
+
+   static Frame snapOf(ServerPlayerEntity b, int flagsExtra) {
+      Frame f = new Frame();
+      f.x = b.getX();
+      f.y = b.getY();
+      f.z = b.getZ();
+      f.yaw = b.getYaw();
+      f.pitch = b.getPitch();
+      f.hp = b.getHealth();
+      f.abs = b.getAbsorptionAmount();
+      f.food = b.getHungerManager().getFoodLevel();
+      f.armor = b.getArmor();
+      f.sel = b.getInventory().getSelectedSlot();
+      int fl = flagsExtra;
+      if (b.isSneaking()) {
+         fl |= F_SNEAK;
+      }
+
+      if (b.isSprinting()) {
+         fl |= F_SPRINT;
+      }
+
+      if (b.isUsingItem()) {
+         fl |= F_USE;
+      }
+
+      if (b.isGliding()) {
+         fl |= F_GLIDE;
+      }
+
+      if (b.isOnGround()) {
+         fl |= F_GROUND;
+      }
+
+      if (b.isBlocking()) {
+         fl |= F_BLOCK;
+      }
+
+      f.flags = fl;
+      f.gear = gearOf(b);
+      return f;
+   }
+
+   static int totems(ServerPlayerEntity b) {
+      int n = 0;
+      PlayerInventory inv = b.getInventory();
+      for (int i = 0; i < 36; i++) {
+         ItemStack st = inv.getStack(i);
+         if (st.isOf(Items.TOTEM_OF_UNDYING)) {
+            n += st.getCount();
+         }
+      }
+
+      ItemStack off = b.getEquippedStack(EquipmentSlot.OFFHAND);
+      if (off.isOf(Items.TOTEM_OF_UNDYING)) {
+         n += off.getCount();
+      }
+
+      return n;
+   }
+
+   // ------------------------------------------------------------------ recorder
+
+   static final class Recorder {
+      Rec rec = new Rec();
+      int startTick;
+      String only;
+      String starter;
+      boolean auto;
+      int idle;
+      final java.util.Map<String, Integer> idx = new java.util.HashMap<>();
+      final java.util.Map<String, Gear> lastGear = new java.util.HashMap<>();
+      final java.util.Map<String, float[]> prev = new java.util.HashMap<>();
+      final java.util.Map<String, Boolean> dead = new java.util.HashMap<>();
+      final java.util.HashMap<Long, Integer> known = new java.util.HashMap<>();
+      final java.util.HashMap<Integer, float[]> prevEnts = new java.util.HashMap<>();
+   }
+
+   static Recorder cur;
+
+   static boolean recording() {
+      return cur != null;
+   }
+
+   static String start(MinecraftServer server, String starter, String only, boolean auto) {
+      if (cur != null) {
+         return "Already recording. Use /pvpbot record stop.";
+      }
+
+      cur = new Recorder();
+      cur.startTick = PvpBotMod.globalTick;
+      cur.only = only;
+      cur.starter = starter;
+      cur.auto = auto;
+      return null;
+   }
+
+   static String stop(MinecraftServer server, String saveAs) {
+      Recorder r = cur;
+      if (r == null) {
+         return "Not recording.";
+      }
+
+      cur = null;
+      r.rec.ticks = PvpBotMod.globalTick - r.startTick;
+      if (r.rec.bots.isEmpty()) {
+         return "Nothing was recorded (no bots).";
+      }
+
+      String n = saveAs == null ? null : clean(saveAs);
+      if (n == null) {
+         n = "rec_" + new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new java.util.Date());
+      }
+
+      try {
+         save(r.rec, dir().resolve(n + ".rec"));
+      } catch (IOException e) {
+         return "Could not save the recording: " + e.getMessage();
+      }
+
+      return "Saved replay " + n + " (" + r.rec.ticks / 20 + "s, " + r.rec.bots.size() + " bot(s), " + r.rec.blks.size() + " block changes). Play it with /pvpbot replay play " + n;
+   }
+
+   static void tellStarter(MinecraftServer server, String who, String msg) {
+      if (who != null && !who.isEmpty()) {
+         ServerPlayerEntity p = server.getPlayerManager().getPlayer(who);
+         if (p != null) {
+            p.sendMessage(Text.literal(msg));
+            return;
+         }
+      }
+
+      System.out.println("[pvpbot] " + msg);
+   }
+
+   static void recordTick(MinecraftServer server) {
+      Recorder r = cur;
+      int now = PvpBotMod.globalTick;
+      int t = now - r.startTick;
+      if (r.auto) {
+         if (PvpBotMod.FIGHTS.isEmpty()) {
+            if (++r.idle > 100) {
+               tellStarter(server, r.starter, stop(server, null));
+               return;
+            }
+         } else {
+            r.idle = 0;
+         }
+      }
+
+      if (t > PvpBotMod.REC_MAX_MIN.asInt() * 1200) {
+         tellStarter(server, r.starter, "Recording length limit reached. " + stop(server, null));
+         return;
+      }
+
+      java.util.List<ServerPlayerEntity> bots = new java.util.ArrayList<>();
+      for (String name : new java.util.ArrayList<>(PvpBotMod.BOTS)) {
+         if (r.only != null && !r.only.equalsIgnoreCase(name)) {
+            continue;
+         }
+
+         ServerPlayerEntity b = server.getPlayerManager().getPlayer(name);
+         if (b != null) {
+            bots.add(b);
+         }
+      }
+
+      for (ServerPlayerEntity b : bots) {
+         String name = b.getName().getString();
+         net.minecraft.server.world.ServerWorld w = BotSupport.sw(b);
+         if (r.rec.bots.isEmpty()) {
+            r.rec.dim = w.getRegistryKey().getValue().toString();
+         }
+
+         Integer bi = r.idx.get(name);
+         if (bi == null) {
+            bi = r.rec.bots.size();
+            r.idx.put(name, bi);
+            r.rec.bots.add(name);
+            r.rec.frames.add(new java.util.ArrayList<>());
+         }
+
+         if (!w.getRegistryKey().getValue().toString().equals(r.rec.dim)) {
+            continue;
+         }
+
+         boolean alive = b.isAlive();
+         float[] pv = r.prev.computeIfAbsent(name, k -> new float[]{b.getHealth(), 0f, totems(b), 0f});
+         if (!alive) {
+            if (!Boolean.TRUE.equals(r.dead.get(name))) {
+               r.dead.put(name, true);
+               event(r, t, bi, E_DEATH, name + " died", b.getX(), b.getY(), b.getZ());
+            }
+
+            continue;
+         }
+
+         r.dead.put(name, false);
+         float prog = b.getHandSwingProgress(0.0F);
+         int extra = prog > 0.0F && pv[1] == 0.0F ? F_SWING : 0;
+         pv[1] = prog;
+         Frame f = snapOf(b, extra);
+         f.t = t;
+         Gear lg = r.lastGear.get(name);
+         if (lg != null && lg.sig.equals(f.gear.sig)) {
+            f.gear = lg;
+         } else {
+            f.gear.idx = r.rec.gears.size();
+            r.rec.gears.add(f.gear);
+            r.lastGear.put(name, f.gear);
+         }
+
+         r.rec.frames.get(bi).add(f);
+         if (f.hp < pv[0] - 0.4F) {
+            event(r, t, bi, E_HURT, "-" + String.format(Locale.ROOT, "%.1f", pv[0] - f.hp), f.x, f.y, f.z);
+         }
+
+         pv[0] = f.hp;
+         int tn = totems(b);
+         if (tn < (int)pv[2]) {
+            event(r, t, bi, E_TOTEM, name + " popped a totem (" + tn + " left)", f.x, f.y, f.z);
+         }
+
+         pv[2] = tn;
+         boolean using = (f.flags & F_USE) != 0;
+         if (using && pv[3] == 0.0F && b.getActiveItem().get(DataComponentTypes.FOOD) != null) {
+            event(r, t, bi, E_EAT, name + " eats " + Registries.ITEM.getId(b.getActiveItem().getItem()).getPath(), f.x, f.y, f.z);
+         }
+
+         pv[3] = using ? 1.0F : 0.0F;
+      }
+
+      if (bots.isEmpty()) {
+         return;
+      }
+
+      // block changes around every bot, entities (crystals, pearls) near them
+      if (t % 2 == 0 && r.rec.blks.size() < 400000) {
+         for (ServerPlayerEntity b : bots) {
+            net.minecraft.server.world.ServerWorld w = BotSupport.sw(b);
+            if (b.isAlive() && w.getRegistryKey().getValue().toString().equals(r.rec.dim)) {
+               scanBlocks(r, w, b.getBlockPos(), t);
+            }
+         }
+      }
+
+      java.util.LinkedHashMap<Integer, float[]> seen = new java.util.LinkedHashMap<>();
+      for (ServerPlayerEntity b : bots) {
+         net.minecraft.server.world.ServerWorld w = BotSupport.sw(b);
+         if (!w.getRegistryKey().getValue().toString().equals(r.rec.dim)) {
+            continue;
+         }
+
+         Box box = b.getBoundingBox().expand(48.0);
+         for (net.minecraft.entity.decoration.EndCrystalEntity c : w.getEntitiesByClass(net.minecraft.entity.decoration.EndCrystalEntity.class, box, e -> true)) {
+            seen.put(c.getId(), new float[]{1, (float)c.getX(), (float)c.getY(), (float)c.getZ()});
+         }
+
+         for (net.minecraft.entity.projectile.thrown.EnderPearlEntity p : w.getEntitiesByClass(net.minecraft.entity.projectile.thrown.EnderPearlEntity.class, box, e -> true)) {
+            seen.put(p.getId(), new float[]{2, (float)p.getX(), (float)p.getY(), (float)p.getZ()});
+         }
+      }
+
+      for (java.util.Map.Entry<Integer, float[]> pe : r.prevEnts.entrySet()) {
+         if (!seen.containsKey(pe.getKey()) && pe.getValue()[0] == 1) {
+            float[] p = pe.getValue();
+            event(r, t, 0, E_EXPLODE, "crystal exploded", p[1], p[2], p[3]);
+         }
+      }
+
+      r.prevEnts.clear();
+      r.prevEnts.putAll(seen);
+      if (!seen.isEmpty()) {
+         EntF ef = new EntF();
+         ef.t = t;
+         int c = seen.size();
+         ef.id = new int[c];
+         ef.type = new int[c];
+         ef.x = new float[c];
+         ef.y = new float[c];
+         ef.z = new float[c];
+         int i = 0;
+         for (java.util.Map.Entry<Integer, float[]> se : seen.entrySet()) {
+            ef.id[i] = se.getKey();
+            ef.type[i] = (int)se.getValue()[0];
+            ef.x[i] = se.getValue()[1];
+            ef.y[i] = se.getValue()[2];
+            ef.z[i] = se.getValue()[3];
+            i++;
+         }
+
+         r.rec.ents.add(ef);
+      }
+   }
+
+   static void event(Recorder r, int t, int bot, int type, String text, double x, double y, double z) {
+      Ev e = new Ev();
+      e.t = t;
+      e.bot = bot;
+      e.type = type;
+      e.text = text;
+      e.x = (float)x;
+      e.y = (float)y;
+      e.z = (float)z;
+      r.rec.evs.add(e);
+   }
+
+   static void scanBlocks(Recorder r, net.minecraft.server.world.ServerWorld w, BlockPos c, int t) {
+      BlockPos.Mutable m = new BlockPos.Mutable();
+      for (int dx = -7; dx <= 7; dx++) {
+         for (int dz = -7; dz <= 7; dz++) {
+            if (!w.isChunkLoaded((c.getX() + dx) >> 4, (c.getZ() + dz) >> 4)) {
+               continue;
+            }
+
+            for (int dy = -3; dy <= 5; dy++) {
+               m.set(c.getX() + dx, c.getY() + dy, c.getZ() + dz);
+               BlockState st = w.getBlockState(m);
+               int raw = net.minecraft.block.Block.getRawIdFromState(st);
+               long key = m.asLong();
+               Integer old = r.known.put(key, raw);
+               if (old != null && old != raw) {
+                  Blk b = new Blk();
+                  b.t = t;
+                  b.pos = key;
+                  b.oldRaw = old;
+                  b.newRaw = raw;
+                  r.rec.blks.add(b);
+                  if (net.minecraft.block.Block.getStateFromRawId(old).isOf(Blocks.RESPAWN_ANCHOR) && st.isAir()) {
+                     event(r, t, 0, E_EXPLODE, "anchor exploded", m.getX() + 0.5, m.getY() + 0.5, m.getZ() + 0.5);
+                  }
+               }
+            }
+         }
+      }
+   }
+
+   // ------------------------------------------------------------------ playback
+
+   static final class Play {
+      Rec rec;
+      String viewer;
+      String viewerMode = "survival";
+      net.minecraft.server.world.ServerWorld world;
+      String[] puppet;
+      boolean[] online;
+      boolean ready;
+      boolean paused;
+      double speed = 1.0;
+      double pos;
+      int lastT = -1;
+      int waited;
+      int endGrace;
+      int watch;
+      Frame[] cur;
+      Gear[] gearOn;
+      int[] selOn, flagsOn;
+      final java.util.Map<Integer, net.minecraft.entity.Entity> ents = new java.util.HashMap<>();
+      final java.util.Map<Integer, EntF> entAt = new java.util.HashMap<>();
+      final java.util.HashMap<Long, Integer> before = new java.util.HashMap<>();
+      final java.util.HashMap<Long, Integer> initial = new java.util.HashMap<>();
+      String flash = "";
+      int flashUntil;
+   }
+
+   static Play play;
+
+   static String pname(String bot) {
+      String n = "r_" + bot;
+      return n.length() > 16 ? n.substring(0, 16) : n;
+   }
+
+   static String playStart(MinecraftServer server, ServerPlayerEntity viewer, String recName, String watchBot) {
+      if (play != null) {
+         return "A replay is already running. Use /pvpbot replay stop.";
+      } else if (!PvpBotMod.herobotPresent()) {
+         return "HeroBot is not installed, replays need it for the puppets.";
+      }
+
+      String n = clean(recName);
+      Path p = n == null ? null : dir().resolve(n + ".rec");
+      if (p == null || !Files.exists(p)) {
+         return "No replay named " + recName + ". See /pvpbot replay list.";
+      }
+
+      Rec rec;
+      try {
+         rec = load(p);
+      } catch (IOException e) {
+         return "Could not read the replay: " + e.getMessage();
+      }
+
+      net.minecraft.server.world.ServerWorld w = server.getWorld(net.minecraft.registry.RegistryKey.of(RegistryKeys.WORLD, Identifier.of(rec.dim)));
+      if (w == null) {
+         return "The dimension " + rec.dim + " is not loaded.";
+      }
+
+      Play pl = new Play();
+      pl.rec = rec;
+      pl.world = w;
+      pl.viewer = viewer.getName().getString();
+      pl.viewerMode = viewer.isCreative() ? "creative" : viewer.isSpectator() ? "spectator" : "survival";
+      int bn = rec.bots.size();
+      pl.puppet = new String[bn];
+      pl.online = new boolean[bn];
+      pl.cur = new Frame[bn];
+      pl.gearOn = new Gear[bn];
+      pl.selOn = new int[bn];
+      pl.flagsOn = new int[bn];
+      java.util.Arrays.fill(pl.selOn, -1);
+      for (int i = 0; i < bn; i++) {
+         pl.puppet[i] = pname(rec.bots.get(i));
+         if (server.getPlayerManager().getPlayer(pl.puppet[i]) != null) {
+            return "A player named " + pl.puppet[i] + " is already online.";
+         }
+
+         if (watchBot != null && rec.bots.get(i).equalsIgnoreCase(watchBot)) {
+            pl.watch = i;
+         }
+      }
+
+      for (EntF e : rec.ents) {
+         pl.entAt.put(e.t, e);
+      }
+
+      // the scene as it was at the start of the recording: first old state of every changed cell; the current state is kept to restore afterwards
+      for (Blk b : rec.blks) {
+         pl.initial.putIfAbsent(b.pos, b.oldRaw);
+      }
+
+      for (long key : pl.initial.keySet()) {
+         BlockPos bp = BlockPos.fromLong(key);
+         if (w.isChunkLoaded(bp.getX() >> 4, bp.getZ() >> 4)) {
+            pl.before.put(key, net.minecraft.block.Block.getRawIdFromState(w.getBlockState(bp)));
+         }
+      }
+
+      play = pl;
+      ServerCommandSource src = server.getCommandSource().withWorld(w);
+      for (int i = 0; i < bn; i++) {
+         server.getCommandManager().parseAndExecute(src, "playerspawn " + pl.puppet[i]);
+      }
+
+      return null;
+   }
+
+   static void setCell(net.minecraft.server.world.ServerWorld w, long key, int raw) {
+      BlockPos bp = BlockPos.fromLong(key);
+      if (w.isChunkLoaded(bp.getX() >> 4, bp.getZ() >> 4)) {
+         w.setBlockState(bp, net.minecraft.block.Block.getStateFromRawId(raw), 34);
+      }
+   }
+
+   static void playStop(MinecraftServer server, String why) {
+      Play pl = play;
+      if (pl == null) {
+         return;
+      }
+
+      play = null;
+      for (net.minecraft.entity.Entity e : pl.ents.values()) {
+         e.discard();
+      }
+
+      for (String pn : pl.puppet) {
+         if (server.getPlayerManager().getPlayer(pn) != null) {
+            BotSupport.run(server, "player " + pn + " disconnect");
+         }
+      }
+
+      for (java.util.Map.Entry<Long, Integer> e : pl.before.entrySet()) {
+         setCell(pl.world, e.getKey(), e.getValue());
+      }
+
+      ServerPlayerEntity v = server.getPlayerManager().getPlayer(pl.viewer);
+      if (v != null) {
+         BotSupport.run(server, "gamemode " + pl.viewerMode + " " + pl.viewer);
+         v.sendMessage(Text.literal("Replay stopped" + (why == null ? "." : ": " + why)));
+      }
+   }
+
+   static Frame frameAt(java.util.List<Frame> fl, int t) {
+      if (fl.isEmpty()) {
+         return null;
+      }
+
+      int lo = 0;
+      int hi = fl.size() - 1;
+      int best = 0;
+      while (lo <= hi) {
+         int mid = (lo + hi) >>> 1;
+         if (fl.get(mid).t <= t) {
+            best = mid;
+            lo = mid + 1;
+         } else {
+            hi = mid - 1;
+         }
+      }
+
+      return fl.get(best);
+   }
+
+   /** jump the scene to tick t: rebuild every changed block as of t (silent, no effects). */
+   static void seek(Play pl, int t) {
+      for (java.util.Map.Entry<Long, Integer> e : pl.initial.entrySet()) {
+         setCell(pl.world, e.getKey(), e.getValue());
+      }
+
+      for (Blk b : pl.rec.blks) {
+         if (b.t > t) {
+            break;
+         }
+
+         setCell(pl.world, b.pos, b.newRaw);
+      }
+
+      pl.lastT = t;
+      for (int i = 0; i < pl.gearOn.length; i++) {
+         pl.gearOn[i] = null;
+         pl.selOn[i] = -1;
+      }
+   }
+
+   static void playTick(MinecraftServer server) {
+      Play pl = play;
+      ServerPlayerEntity viewer = server.getPlayerManager().getPlayer(pl.viewer);
+      if (viewer == null) {
+         playStop(server, "the viewer left");
+         return;
+      }
+
+      if (!pl.ready) {
+         boolean all = true;
+         for (int i = 0; i < pl.puppet.length; i++) {
+            ServerPlayerEntity pp = server.getPlayerManager().getPlayer(pl.puppet[i]);
+            if (pp == null) {
+               all = false;
+            } else if (!pl.online[i]) {
+               pl.online[i] = true;
+               BotSupport.run(server, "gamemode creative " + pl.puppet[i]);
+               pp.setInvulnerable(true);
+            }
+         }
+
+         if (!all) {
+            if (++pl.waited > 200) {
+               playStop(server, "the puppets could not be spawned");
+            }
+
+            return;
+         }
+
+         pl.ready = true;
+         pl.pos = 0;
+         seek(pl, 0);
+         BotSupport.run(server, "gamemode spectator " + pl.viewer);
+         BotSupport.run(server, "spectate " + pl.puppet[Math.min(pl.watch, pl.puppet.length - 1)] + " " + pl.viewer);
+         viewer.sendMessage(Text.literal("Replay " + pl.rec.name + " started. Spectating " + pl.puppet[Math.min(pl.watch, pl.puppet.length - 1)] + ". Controls: /pvpbot replay pause | resume | speed <x> | seek <seconds> | skip <+-seconds> | watch <bot> | stop"));
+      }
+
+      if (!pl.paused) {
+         pl.pos += pl.speed;
+      }
+
+      int t = (int)pl.pos;
+      if (t > pl.rec.ticks + 40) {
+         playStop(server, "the replay ended");
+         return;
+      }
+
+      if (t < 0) {
+         pl.pos = 0;
+         t = 0;
+      }
+
+      if (t < pl.lastT) {
+         seek(pl, t);
+      }
+
+      // blocks (forward only here, backwards goes through seek)
+      if (t != pl.lastT) {
+         for (Blk b : pl.rec.blks) {
+            if (b.t > pl.lastT && b.t <= t) {
+               setCell(pl.world, b.pos, b.newRaw);
+            }
+         }
+
+         for (Ev e : pl.rec.evs) {
+            if (e.t > pl.lastT && e.t <= t && pl.lastT >= 0) {
+               playEvent(server, pl, e);
+            }
+         }
+      }
+
+      pl.lastT = t;
+      for (int i = 0; i < pl.puppet.length; i++) {
+         ServerPlayerEntity pp = server.getPlayerManager().getPlayer(pl.puppet[i]);
+         Frame f = frameAt(pl.rec.frames.get(i), t);
+         pl.cur[i] = f;
+         if (pp == null || f == null) {
+            continue;
+         }
+
+         applyFrame(server, pl, i, pp, f);
+      }
+
+      tickEntities(server, pl, t);
+   }
+
+   static void playEvent(MinecraftServer server, Play pl, Ev e) {
+      pl.flash = e.text;
+      pl.flashUntil = PvpBotMod.globalTick + 50;
+      ServerPlayerEntity pp = e.bot >= 0 && e.bot < pl.puppet.length ? server.getPlayerManager().getPlayer(pl.puppet[e.bot]) : null;
+      if (e.type == E_HURT && pp != null) {
+         pl.world.sendEntityStatus(pp, (byte)2);
+      } else if (e.type == E_TOTEM && pp != null) {
+         pl.world.sendEntityStatus(pp, (byte)35);
+      } else if (e.type == E_EXPLODE) {
+         String at = String.format(Locale.ROOT, "%.2f %.2f %.2f", e.x, e.y, e.z);
+         String dim = pl.rec.dim;
+         BotSupport.run(server, "execute in " + dim + " run particle minecraft:explosion_emitter " + at);
+         BotSupport.run(server, "execute in " + dim + " run playsound minecraft:entity.generic.explode block @a " + at + " 4");
+      }
+   }
+
+   static void applyFrame(MinecraftServer server, Play pl, int i, ServerPlayerEntity pp, Frame f) {
+      String pn = pl.puppet[i];
+      BotSupport.run(server, String.format(Locale.ROOT, "tp %s %.3f %.3f %.3f %.2f %.2f", pn, f.x, f.y, f.z, f.yaw, f.pitch));
+      if (pl.gearOn[i] != f.gear) {
+         pl.gearOn[i] = f.gear;
+         PlayerInventory inv = pp.getInventory();
+         for (int k = 0; k < 9; k++) {
+            inv.setStack(k, stackOf(f.gear, k));
+         }
+
+         pp.equipStack(EquipmentSlot.OFFHAND, stackOf(f.gear, 9));
+         pp.equipStack(EquipmentSlot.HEAD, stackOf(f.gear, 10));
+         pp.equipStack(EquipmentSlot.CHEST, stackOf(f.gear, 11));
+         pp.equipStack(EquipmentSlot.LEGS, stackOf(f.gear, 12));
+         pp.equipStack(EquipmentSlot.FEET, stackOf(f.gear, 13));
+         pl.selOn[i] = -1;
+      }
+
+      if (pl.selOn[i] != f.sel) {
+         pl.selOn[i] = f.sel;
+         BotSupport.run(server, "player " + pn + " hotbar " + (f.sel + 1));
+      }
+
+      int ch = f.flags ^ pl.flagsOn[i];
+      if ((ch & F_SNEAK) != 0) {
+         BotSupport.run(server, "player " + pn + ((f.flags & F_SNEAK) != 0 ? " sneak" : " unsneak"));
+      }
+
+      if ((ch & F_SPRINT) != 0) {
+         BotSupport.run(server, "player " + pn + ((f.flags & F_SPRINT) != 0 ? " sprint" : " unsprint"));
+      }
+
+      if ((f.flags & F_GLIDE) != 0 && !pp.isGliding()) {
+         pp.startGliding();
+      } else if ((f.flags & F_GLIDE) == 0 && pp.isGliding()) {
+         pp.stopGliding();
+      }
+
+      if ((f.flags & F_USE) != 0) {
+         if (!pp.isUsingItem()) {
+            pp.setCurrentHand(Hand.MAIN_HAND);
+         }
+      } else if (pp.isUsingItem()) {
+         pp.clearActiveItem();
+      }
+
+      if ((f.flags & F_SWING) != 0 && (pl.flagsOn[i] & F_SWING) == 0) {
+         pp.swingHand(Hand.MAIN_HAND);
+      }
+
+      pl.flagsOn[i] = f.flags;
+   }
+
+   static ItemStack stackOf(Gear g, int i) {
+      if (g.id[i] == null || g.id[i].isEmpty() || g.n[i] <= 0) {
+         return ItemStack.EMPTY;
+      }
+
+      return new ItemStack(Registries.ITEM.get(Identifier.of(g.id[i])), g.n[i]);
+   }
+
+   static void tickEntities(MinecraftServer server, Play pl, int t) {
+      EntF ef = pl.entAt.get(t);
+      java.util.Set<Integer> keep = new java.util.HashSet<>();
+      if (ef != null) {
+         for (int k = 0; k < ef.id.length; k++) {
+            keep.add(ef.id[k]);
+            net.minecraft.entity.Entity e = pl.ents.get(ef.id[k]);
+            if (e == null || e.isRemoved()) {
+               if (ef.type[k] == 1) {
+                  net.minecraft.entity.decoration.EndCrystalEntity c = new net.minecraft.entity.decoration.EndCrystalEntity(pl.world, ef.x[k], ef.y[k], ef.z[k]);
+                  c.setInvulnerable(true);
+                  e = c;
+               } else {
+                  net.minecraft.entity.ItemEntity it = new net.minecraft.entity.ItemEntity(pl.world, ef.x[k], ef.y[k], ef.z[k], new ItemStack(Items.ENDER_PEARL));
+                  it.setNoGravity(true);
+                  it.setPickupDelay(32767);
+                  it.setVelocity(0, 0, 0);
+                  e = it;
+               }
+
+               pl.world.spawnEntity(e);
+               pl.ents.put(ef.id[k], e);
+            } else {
+               e.setPosition(ef.x[k], ef.y[k], ef.z[k]);
+               e.setVelocity(0, 0, 0);
+            }
+         }
+      }
+
+      java.util.Iterator<java.util.Map.Entry<Integer, net.minecraft.entity.Entity>> it = pl.ents.entrySet().iterator();
+      while (it.hasNext()) {
+         java.util.Map.Entry<Integer, net.minecraft.entity.Entity> en = it.next();
+         if (!keep.contains(en.getKey())) {
+            en.getValue().discard();
+            it.remove();
+         }
+      }
+   }
+
+   // ------------------------------------------------------------------ HUD (spectators)
+
+   static final java.util.Map<java.util.UUID, net.minecraft.entity.boss.ServerBossBar> BARS = new java.util.HashMap<>();
+
+   static String shortItem(String id, int n, boolean sel) {
+      if (id == null || id.isEmpty()) {
+         return sel ? "§e[ ]" : "§8[ ]";
+      }
+
+      String s = id.contains(":") ? id.substring(id.indexOf(':') + 1) : id;
+      s = s.replace("_", " ");
+      if (s.length() > 9) {
+         s = s.substring(0, 9);
+      }
+
+      return (sel ? "§e§l[" : "§7[") + s + (n > 1 ? " x" + n : "") + (sel ? "§e§l]" : "§7]");
+   }
+
+   static void hudTick(MinecraftServer server) {
+      java.util.Set<java.util.UUID> shown = new java.util.HashSet<>();
+      if (PvpBotMod.SPEC_HUD.on()) {
+         for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList()) {
+            if (!p.isSpectator() || !(p.getCameraEntity() instanceof ServerPlayerEntity c) || c == p) {
+               continue;
+            }
+
+            String cn = c.getName().getString();
+            Frame s = null;
+            String flash = "";
+            String tag = "";
+            if (play != null && play.ready) {
+               for (int i = 0; i < play.puppet.length; i++) {
+                  if (play.puppet[i].equalsIgnoreCase(cn)) {
+                     s = play.cur[i];
+                     tag = "§d[REPLAY " + clock(play.lastT) + "/" + clock(play.rec.ticks) + " x" + String.format(Locale.ROOT, "%.2f", play.speed) + (play.paused ? " PAUSED" : "") + "] ";
+                     if (PvpBotMod.globalTick < play.flashUntil) {
+                        flash = " §f| §6" + play.flash;
+                     }
+                  }
+               }
+            }
+
+            if (s == null && PvpBotMod.BOTS.contains(cn)) {
+               s = snapOf(c, 0);
+               tag = "§a[LIVE] ";
+            }
+
+            if (s == null) {
+               continue;
+            }
+
+            shown.add(p.getUuid());
+            StringBuilder hb = new StringBuilder();
+            for (int i = 0; i < 9; i++) {
+               hb.append(shortItem(s.gear.id[i], s.gear.n[i], i == s.sel)).append(' ');
+            }
+
+            hb.append("§f| Off ").append(shortItem(s.gear.id[9], s.gear.n[9], false));
+            net.minecraft.entity.boss.ServerBossBar bar = BARS.get(p.getUuid());
+            if (bar == null) {
+               bar = new net.minecraft.entity.boss.ServerBossBar(Text.literal(""), net.minecraft.entity.boss.BossBar.Color.RED, net.minecraft.entity.boss.BossBar.Style.PROGRESS);
+               bar.addPlayer(p);
+               BARS.put(p.getUuid(), bar);
+            }
+
+            bar.setName(Text.literal(hb.toString()));
+            bar.setPercent(Math.max(0.0F, Math.min(1.0F, s.hp / 20.0F)));
+            String line = tag + "§c❤ " + String.format(Locale.ROOT, "%.1f", s.hp)
+               + (s.abs > 0.0F ? " §6+" + String.format(Locale.ROOT, "%.1f", s.abs) : "")
+               + " §6Food " + s.food + " §7Armor " + s.armor
+               + (s.gear.id[9] != null && s.gear.id[9].contains("totem") ? " §eTotem" : "")
+               + flash;
+            p.sendMessage(Text.literal(line), true);
+         }
+      }
+
+      java.util.Iterator<java.util.Map.Entry<java.util.UUID, net.minecraft.entity.boss.ServerBossBar>> it = BARS.entrySet().iterator();
+      while (it.hasNext()) {
+         java.util.Map.Entry<java.util.UUID, net.minecraft.entity.boss.ServerBossBar> e = it.next();
+         if (!shown.contains(e.getKey())) {
+            e.getValue().clearPlayers();
+            it.remove();
+         }
+      }
+   }
+
+   static String clock(int ticks) {
+      int s = Math.max(0, ticks) / 20;
+      return (s / 60) + ":" + (s % 60 < 10 ? "0" : "") + (s % 60);
+   }
+
+   // ------------------------------------------------------------------ tick + commands
+
+   static void tick(MinecraftServer server) {
+      if (cur == null && PvpBotMod.AUTO_REC.on() && !PvpBotMod.FIGHTS.isEmpty() && PvpBotMod.globalTick % 20 == 0) {
+         start(server, "", null, true);
+      }
+
+      if (cur != null) {
+         recordTick(server);
+      }
+
+      if (play != null) {
+         playTick(server);
+      }
+
+      if (PvpBotMod.globalTick % 2 == 0 && (PvpBotMod.SPEC_HUD.on() || !BARS.isEmpty())) {
+         hudTick(server);
+      }
+   }
+
+   static void register(LiteralArgumentBuilder<ServerCommandSource> root) {
+      LiteralArgumentBuilder<ServerCommandSource> rec = CommandManager.literal("record");
+      rec.then(
+         CommandManager.literal("start")
+            .executes(ctx -> reply(ctx, start(ctx.getSource().getServer(), who(ctx), null, false), "Recording every bot. Stop with /pvpbot record stop [name]."))
+            .then(
+               CommandManager.argument("bot", StringArgumentType.word())
+                  .suggests(PvpBotMod.BOT_NAMES)
+                  .executes(ctx -> reply(ctx, start(ctx.getSource().getServer(), who(ctx), StringArgumentType.getString(ctx, "bot"), false), "Recording started."))
+            )
+      );
+      rec.then(
+         CommandManager.literal("stop")
+            .executes(ctx -> stopCmd(ctx, null))
+            .then(CommandManager.argument("name", StringArgumentType.word()).executes(ctx -> stopCmd(ctx, StringArgumentType.getString(ctx, "name"))))
+      );
+      rec.then(CommandManager.literal("status").executes(ctx -> {
+         Recorder r = cur;
+         ctx.getSource().sendFeedback(() -> Text.literal(r == null ? "Not recording." : "Recording: " + (PvpBotMod.globalTick - r.startTick) / 20 + "s, " + r.rec.bots.size() + " bot(s), " + r.rec.blks.size() + " block changes."), false);
+         return 1;
+      }));
+
+      LiteralArgumentBuilder<ServerCommandSource> rp = CommandManager.literal("replay");
+      rp.then(CommandManager.literal("list").executes(ctx -> {
+         java.util.List<String> n = names();
+         ctx.getSource().sendFeedback(() -> Text.literal(n.isEmpty() ? "No replays yet. Use /pvpbot record start." : "Replays: " + String.join(", ", n)), false);
+         return 1;
+      }));
+      rp.then(
+         CommandManager.literal("play")
+            .then(
+               CommandManager.argument("name", StringArgumentType.word())
+                  .suggests((ctx, b) -> net.minecraft.command.CommandSource.suggestMatching(names(), b))
+                  .executes(ctx -> playCmd(ctx, null))
+                  .then(CommandManager.argument("bot", StringArgumentType.word()).executes(ctx -> playCmd(ctx, StringArgumentType.getString(ctx, "bot"))))
+            )
+      );
+      rp.then(CommandManager.literal("stop").executes(ctx -> {
+         if (play == null) {
+            ctx.getSource().sendError(Text.literal("No replay is running."));
+            return 0;
+         }
+
+         playStop(ctx.getSource().getServer(), null);
+         return 1;
+      }));
+      rp.then(CommandManager.literal("pause").executes(ctx -> ctl(ctx, p -> p.paused = true, "Paused.")));
+      rp.then(CommandManager.literal("resume").executes(ctx -> ctl(ctx, p -> p.paused = false, "Playing.")));
+      rp.then(
+         CommandManager.literal("speed")
+            .then(CommandManager.argument("x", DoubleArgumentType.doubleArg(0.1, 8.0)).executes(ctx -> {
+               double x = DoubleArgumentType.getDouble(ctx, "x");
+               return ctl(ctx, p -> p.speed = x, "Speed x" + x);
+            }))
+      );
+      rp.then(
+         CommandManager.literal("seek")
+            .then(CommandManager.argument("seconds", IntegerArgumentType.integer(0, 100000)).executes(ctx -> {
+               int s = IntegerArgumentType.getInteger(ctx, "seconds");
+               return ctl(ctx, p -> {
+                  p.pos = s * 20;
+                  seek(p, s * 20);
+               }, "Jumped to " + s + "s.");
+            }))
+      );
+      rp.then(
+         CommandManager.literal("skip")
+            .then(CommandManager.argument("seconds", IntegerArgumentType.integer(-3600, 3600)).executes(ctx -> {
+               int s = IntegerArgumentType.getInteger(ctx, "seconds");
+               return ctl(ctx, p -> {
+                  p.pos = Math.max(0, p.pos + s * 20);
+                  seek(p, (int)p.pos);
+               }, "Skipped " + s + "s.");
+            }))
+      );
+      rp.then(
+         CommandManager.literal("watch")
+            .then(CommandManager.argument("bot", StringArgumentType.word()).executes(ctx -> {
+               String b = StringArgumentType.getString(ctx, "bot");
+               return ctl(ctx, p -> {
+                  for (int i = 0; i < p.rec.bots.size(); i++) {
+                     if (p.rec.bots.get(i).equalsIgnoreCase(b)) {
+                        p.watch = i;
+                        BotSupport.run(ctx.getSource().getServer(), "spectate " + p.puppet[i] + " " + p.viewer);
+                     }
+                  }
+               }, "Watching " + b + ".");
+            }))
+      );
+      rp.then(
+         CommandManager.literal("delete")
+            .then(
+               CommandManager.argument("name", StringArgumentType.word())
+                  .suggests((ctx, b) -> net.minecraft.command.CommandSource.suggestMatching(names(), b))
+                  .executes(ctx -> {
+                     String n = clean(StringArgumentType.getString(ctx, "name"));
+                     try {
+                        if (n != null && Files.deleteIfExists(dir().resolve(n + ".rec"))) {
+                           ctx.getSource().sendFeedback(() -> Text.literal("Deleted " + n), false);
+                           return 1;
+                        }
+                     } catch (IOException ignored) {
+                     }
+
+                     ctx.getSource().sendError(Text.literal("No replay with that name."));
+                     return 0;
+                  })
+            )
+      );
+      root.then(rec);
+      root.then(rp);
+   }
+
+   static String who(CommandContext<ServerCommandSource> ctx) {
+      ServerPlayerEntity p = ctx.getSource().getPlayer();
+      return p == null ? "" : p.getName().getString();
+   }
+
+   static int reply(CommandContext<ServerCommandSource> ctx, String err, String ok) {
+      if (err != null) {
+         ctx.getSource().sendError(Text.literal(err));
+         return 0;
+      }
+
+      ctx.getSource().sendFeedback(() -> Text.literal(ok), false);
+      return 1;
+   }
+
+   static int stopCmd(CommandContext<ServerCommandSource> ctx, String name) {
+      String r = stop(ctx.getSource().getServer(), name);
+      ctx.getSource().sendFeedback(() -> Text.literal(r), false);
+      return 1;
+   }
+
+   static int playCmd(CommandContext<ServerCommandSource> ctx, String bot) throws CommandSyntaxException {
+      ServerPlayerEntity me = ctx.getSource().getPlayerOrThrow();
+      String err = playStart(ctx.getSource().getServer(), me, StringArgumentType.getString(ctx, "name"), bot);
+      return reply(ctx, err, "Spawning the replay puppets...");
+   }
+
+   static int ctl(CommandContext<ServerCommandSource> ctx, java.util.function.Consumer<Play> act, String msg) {
+      if (play == null || !play.ready) {
+         ctx.getSource().sendError(Text.literal("No replay is running."));
+         return 0;
+      }
+
+      act.accept(play);
+      ctx.getSource().sendFeedback(() -> Text.literal(msg), false);
+      return 1;
    }
 }
