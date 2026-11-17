@@ -2964,7 +2964,8 @@ public class PvpBotMod implements ModInitializer {
       boolean cryWalking;
       int cryBack;
       boolean cryBackOn;
-      boolean cryChain, cryTValid, cryTCd, cryAnchored, cryNear;
+      boolean cryChain, cryTValid, cryTCd, cryAnchored, cryNear, cryHitAfter;
+      int cryAirLeft, cryArrowTried, cryHitTried, cryPull;
       int cryEscCool, cryDmgTick, cryTotPrev, cryEnemyTick;
       double cryDmgWin, cryHpPrev;
       Vec3d cryPoint;
@@ -3439,7 +3440,7 @@ final class BotSupport {
    }
 
    static void logBreak(net.minecraft.server.world.ServerWorld w, BlockPos pos, BlockState state) {
-      if (state.isAir() || state.getBlock() instanceof net.minecraft.block.FluidBlock) {
+      if (state.isAir() || state.getBlock() instanceof net.minecraft.block.FluidBlock || skipRepair(state)) {
          return;
       }
 
@@ -3476,6 +3477,83 @@ final class BotSupport {
       }
    }
 
+   /** command blocks and buttons are never restored or erased by /pvpbot repair. */
+   static boolean skipRepair(BlockState st) {
+      return st.isOf(Blocks.COMMAND_BLOCK) || st.isOf(Blocks.CHAIN_COMMAND_BLOCK) || st.isOf(Blocks.REPEATING_COMMAND_BLOCK)
+         || st.isIn(net.minecraft.registry.tag.BlockTags.BUTTONS);
+   }
+
+   /** blocks around fighting bots that use crystals / anchors: remembered every 2 ticks so a block that vanishes in an explosion can be restored. */
+   static final java.util.HashMap<Long, BlockState> XKNOWN = new java.util.HashMap<>();
+
+   static void explosionScan(MinecraftServer server) {
+      int now = PvpBotMod.globalTick;
+      if (now % 2 != 0 || PvpBotMod.FIGHTS.isEmpty()) {
+         return;
+      }
+
+      for (java.util.Map.Entry<String, PvpBotMod.Fight> e : PvpBotMod.FIGHTS.entrySet()) {
+         ServerPlayerEntity b = server.getPlayerManager().getPlayer(e.getKey());
+         if (b == null) {
+            continue;
+         }
+
+         net.minecraft.server.world.ServerWorld w = sw(b);
+         boolean active = e.getValue().phase == PvpBotMod.Phase.CRYSTAL
+            || !w.getEntitiesByClass(net.minecraft.entity.decoration.EndCrystalEntity.class, b.getBoundingBox().expand(16.0), x -> true).isEmpty();
+         if (!active) {
+            for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList()) {
+               if (p != b && p.getMainHandStack().isOf(Items.END_CRYSTAL) && p.squaredDistanceTo(b) < 400.0) {
+                  active = true;
+                  break;
+               }
+            }
+         }
+
+         if (!active) {
+            continue;
+         }
+
+         BlockPos c = b.getBlockPos();
+         BlockPos.Mutable m = new BlockPos.Mutable();
+         for (int dx = -9; dx <= 9; dx++) {
+            for (int dz = -9; dz <= 9; dz++) {
+               if (!w.isChunkLoaded((c.getX() + dx) >> 4, (c.getZ() + dz) >> 4)) {
+                  continue;
+               }
+
+               for (int dy = -5; dy <= 6; dy++) {
+                  m.set(c.getX() + dx, c.getY() + dy, c.getZ() + dz);
+                  BlockState cur = w.getBlockState(m);
+                  BlockState old = XKNOWN.put(m.asLong(), cur);
+                  if (old != null && old != cur && cur.isAir() && !old.isAir() && !(old.getBlock() instanceof net.minecraft.block.FluidBlock) && !skipRepair(old)) {
+                     logExploded(w, m.toImmutable(), old);
+                  }
+               }
+            }
+         }
+      }
+
+      if (XKNOWN.size() > 90000) {
+         XKNOWN.clear();
+      }
+   }
+
+   static void logExploded(net.minecraft.server.world.ServerWorld w, BlockPos pos, BlockState old) {
+      for (int i = BLOCK_LOG.size() - 1; i >= 0 && i > BLOCK_LOG.size() - 400; i--) {
+         BlockRec r = BLOCK_LOG.get(i);
+         if (r.world == w && r.pos.equals(pos)) {
+            if (r.restore == null) {
+               BLOCK_LOG.remove(i); // a block the bots placed blew up: nothing to restore
+            }
+
+            return;
+         }
+      }
+
+      BLOCK_LOG.add(new BlockRec(w, pos, PvpBotMod.globalTick, old.getBlock(), old));
+   }
+
    static int repairBlocks(MinecraftServer server, int seconds) {
       int from = PvpBotMod.globalTick - seconds * 20;
       int n = 0;
@@ -3486,6 +3564,11 @@ final class BotSupport {
          }
 
          net.minecraft.server.world.ServerWorld w = r.world;
+         if (r.restore != null ? skipRepair(r.restore) : skipRepair(r.block.getDefaultState())) {
+            BLOCK_LOG.remove(i);
+            continue;
+         }
+
          BlockState cur = w.getBlockState(r.pos);
          if (r.restore != null) {
             if (cur.isAir() || cur.getBlock() instanceof net.minecraft.block.FluidBlock) {
@@ -5501,6 +5584,7 @@ final class BotSupport {
       Kits.tick(server);
       Replay.tick(server);
       blockLogTick();
+      explosionScan(server);
 
       if (!PvpBotMod.PENDING_CHESTS.isEmpty()) {
          tickPendingChests();
@@ -7550,12 +7634,29 @@ final class Fighting {
    }
 
    /** the obsidian cell around the bot (feet level) with the most damage on the target that the bot can still reach; null if none. */
+   static boolean cryAirborne(ServerPlayerEntity target) {
+      return !target.isOnGround() || target.hasStatusEffect(net.minecraft.entity.effect.StatusEffects.SLOW_FALLING);
+   }
+
    static BlockPos cryPickBase(ServerPlayerEntity bot, ServerPlayerEntity target) {
+      return cryPickBaseImpl(bot, target, cryAirborne(target));
+   }
+
+   /**
+    * the obsidian cell around the bot (feet level) with the best crystal damage on the target. Cells where the target is standing in the way of the
+    * placement (the line from the bot's eyes to the cell passes through the target) are skipped, cells to the sides of the bot-target line get a bonus.
+    * air = the target is in the air (knocked up / slow falling): the crystal level rules are relaxed, the blast is rated as if the target were 1.2 higher.
+    */
+   static BlockPos cryPickBaseImpl(ServerPlayerEntity bot, ServerPlayerEntity target, boolean air) {
       net.minecraft.server.world.ServerWorld w = BotSupport.sw(bot);
       BlockPos feet = bot.getBlockPos();
       BlockPos best = null;
       double bestScore = -1000.0;
       Vec3d eye = bot.getEyePos();
+      net.minecraft.util.math.Box tb = target.getBoundingBox().expand(0.35);
+      double lx = target.getX() - bot.getX();
+      double lz = target.getZ() - bot.getZ();
+      double ll = Math.max(0.01, Math.sqrt(lx * lx + lz * lz));
       for (int dx = -4; dx <= 4; dx++) {
          for (int dz = -4; dz <= 4; dz++) {
             if (dx == 0 && dz == 0) {
@@ -7573,12 +7674,22 @@ final class Fighting {
             }
 
             Vec3d top = cryPos(cell);
-            if (target.getY() < cell.getY() + 0.9 || target.getY() > cell.getY() + 5.6 || Math.hypot(target.getX() - top.x, target.getZ() - top.z) > 5.0) {
+            double hz = Math.hypot(target.getX() - top.x, target.getZ() - top.z);
+            if (air) {
+               if (hz > 6.0) {
+                  continue;
+               }
+            } else if (target.getY() < cell.getY() + 0.9 || target.getY() > cell.getY() + 5.6 || hz > 5.0) {
                continue;
             }
 
-            if (eye.distanceTo(top) > 4.4 || eye.distanceTo(new Vec3d(top.x, cell.getY(), top.z)) > 4.4) {
+            Vec3d floorTop = new Vec3d(top.x, cell.getY(), top.z);
+            if (eye.distanceTo(top) > 4.4 || eye.distanceTo(floorTop) > 4.4) {
                continue;
+            }
+
+            if (tb.raycast(eye, top).isPresent() || tb.raycast(eye, floorTop).isPresent()) {
+               continue; // the target stands in the way of the placement
             }
 
             double self = cryDamage(bot, top, 6.0);
@@ -7586,12 +7697,13 @@ final class Fighting {
                continue;
             }
 
-            double dmg = cryDamage(target, top, 6.0);
-            if (dmg < 3.0) {
+            double dmg = cryDamage(target, air ? top.add(0.0, -1.2, 0.0) : top, 6.0);
+            if (dmg < (air ? 2.0 : 3.0)) {
                continue;
             }
 
-            double score = dmg - 0.25 * self + (have ? 0.5 : 0.0);
+            double lateral = Math.abs((top.x - bot.getX()) * lz - (top.z - bot.getZ()) * lx) / ll;
+            double score = dmg - 0.25 * self + (have ? 0.5 : 0.0) + Math.min(1.5, lateral * 0.75);
             if (score > bestScore) {
                bestScore = score;
                best = cell;
@@ -7687,6 +7799,10 @@ final class Fighting {
       f.cryAnchor = null;
       f.cryPoint = null;
       f.cryNear = false;
+      f.cryHitAfter = false;
+      f.cryAirLeft = 0;
+      f.cryArrowTried = 0;
+      f.cryHitTried = 0;
       f.cryAnchored = false;
       f.cryTValid = false;
       f.cryTCd = target.getItemCooldownManager().isCoolingDown(Items.ENDER_PEARL.getDefaultStack());
@@ -7743,7 +7859,7 @@ final class Fighting {
 
    /** pitch for the current pearl throw: at the crater the anchor made, else at the target. */
    static double cryPearlPitch(PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
-      return f.cryPoint != null ? pearlPitchAt(bot, f.cryPoint.x, f.cryPoint.y, f.cryPoint.z) : pearlPitch(bot, target);
+      return f.cryPoint != null ? pearlPitchClearAt(bot, f.cryPoint.x, f.cryPoint.y, f.cryPoint.z) : pearlPitch(bot, target);
    }
 
    static double cryPearlYaw(PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
@@ -7808,7 +7924,7 @@ final class Fighting {
                }
 
                double dmg = cryDamage(target, cryPos(cell), 6.0);
-               if (dmg > bestDmg && !Double.isNaN(pearlPitchAt(bot, cell.getX() + 0.5, cell.getY(), cell.getZ() + 0.5))) {
+               if (dmg > bestDmg && !Double.isNaN(pearlPitchClearAt(bot, cell.getX() + 0.5, cell.getY(), cell.getZ() + 0.5))) {
                   bestDmg = dmg;
                   best = cell;
                }
@@ -7895,12 +8011,206 @@ final class Fighting {
          return false;
       }
 
+      if (target.getY() < bot.getY() - 0.5 && BotSupport.findItemIndex(bot, Items.SHIELD) >= 0) {
+         return cryShieldEscape(server, name, f, bot, target);
+      }
+
       flog(f, "crystal pvp: the bot is being crystal-spammed, pearling away to heal");
       if (f.phase == PvpBotMod.Phase.CRYSTAL) {
          crystalEnd(server, name, f, "being crystal-spammed");
       }
 
       return startPearlEscape(server, name, f, bot, target);
+   }
+
+   /** like pearlPitchAt, but the whole flight must be free of solid blocks (so the pearl does not hit the anchor shield or a crater wall). NaN if no arc is clear. */
+   static double pearlPitchClearAt(ServerPlayerEntity bot, double tx, double ty, double tz) {
+      net.minecraft.server.world.ServerWorld w = BotSupport.sw(bot);
+      double dx = tx - bot.getX();
+      double dz = tz - bot.getZ();
+      double hd = Math.sqrt(dx * dx + dz * dz);
+      if (hd < 0.5) {
+         return Double.NaN;
+      }
+
+      double ux = dx / hd;
+      double uz = dz / hd;
+      double ey = bot.getEyeY();
+      double best = Double.NaN;
+      double bestErr = 1.0E9;
+      for (double p = -85.0; p <= 15.0; p += 0.5) {
+         double rad = Math.toRadians(p);
+         double vh = Math.cos(rad) * 1.5;
+         double vy = -Math.sin(rad) * 1.5;
+         double h = 0.0;
+         double y = 0.0;
+         boolean clear = true;
+         for (int t = 0; t < 160; t++) {
+            h += vh;
+            y += vy;
+            vh *= 0.99;
+            vy *= 0.99;
+            vy -= 0.03;
+            if (ey + y <= ty && vy < 0.0) {
+               double err = Math.abs(h - hd);
+               if (clear && err < bestErr) {
+                  bestErr = err;
+                  best = p;
+               }
+
+               break;
+            }
+
+            if (h > 1.2) {
+               BlockPos bp = BlockPos.ofFloored(bot.getX() + ux * h, ey + y, bot.getZ() + uz * h);
+               if (!w.getBlockState(bp).getCollisionShape(w, bp).isEmpty()) {
+                  clear = false;
+                  break;
+               }
+            }
+         }
+      }
+
+      return bestErr <= 2.0 ? best : Double.NaN;
+   }
+
+   static boolean isSlowArrow(ItemStack st) {
+      return st.isOf(Items.TIPPED_ARROW) && st.getName().getString().toLowerCase(Locale.ROOT).contains("slow falling");
+   }
+
+   static int slowArrowIndex(ServerPlayerEntity bot) {
+      PlayerInventory inv = bot.getInventory();
+      for (int i = 0; i < 36; i++) {
+         if (isSlowArrow(inv.getStack(i))) {
+            return i;
+         }
+      }
+
+      return -1;
+   }
+
+   /** the first arrow in the inventory is the one a crossbow loads: put the slow falling arrow there. */
+   static void cryArrowFirst(ServerPlayerEntity bot) {
+      PlayerInventory inv = bot.getInventory();
+      int slow = -1;
+      int first = -1;
+      for (int i = 0; i < 36; i++) {
+         ItemStack st = inv.getStack(i);
+         if (st.isOf(Items.ARROW) || st.isOf(Items.TIPPED_ARROW) || st.isOf(Items.SPECTRAL_ARROW)) {
+            if (first < 0) {
+               first = i;
+            }
+
+            if (slow < 0 && isSlowArrow(st)) {
+               slow = i;
+            }
+         }
+      }
+
+      if (slow >= 0 && first >= 0 && slow != first) {
+         ItemStack a = inv.getStack(slow).copy();
+         ItemStack b = inv.getStack(first).copy();
+         inv.setStack(slow, b);
+         inv.setStack(first, a);
+      }
+   }
+
+   static boolean chargedHasSlow(ItemStack st) {
+      var c = st.get(DataComponentTypes.CHARGED_PROJECTILES);
+      if (c == null || c.isEmpty()) {
+         return false;
+      }
+
+      for (ItemStack a : c.getProjectiles()) {
+         if (isSlowArrow(a)) {
+            return true;
+         }
+      }
+
+      return false;
+   }
+
+   static int slowCrossbowIndex(ServerPlayerEntity bot) {
+      PlayerInventory inv = bot.getInventory();
+      for (int i = 0; i < 36; i++) {
+         if (chargedHasSlow(inv.getStack(i))) {
+            return i;
+         }
+      }
+
+      return -1;
+   }
+
+   /** no way to crystal the target from here: anchor, slow falling arrow, or hit it and crystal it while it is in the air. true = a stage was set. */
+   static boolean cryFallback(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int now = PvpBotMod.globalTick;
+      if (!f.cryAnchored && cryAnchorKit(bot) && dist <= 8.0 && cryAnchorSpot(bot, target) != null) {
+         flog(f, "crystal pvp: no crystal spot, doing the anchor instead");
+         f.cryMode = 3;
+         return true;
+      }
+
+      boolean hasXbow = slowCrossbowIndex(bot) >= 0 || findUnloadedCrossbow(bot) >= 0;
+      if (f.cryArrowTried < 1 && hasXbow && slowArrowIndex(bot) >= 0 && dist >= 3.0 && dist <= 25.0 && bot.canSee(target)
+         && !target.hasStatusEffect(net.minecraft.entity.effect.StatusEffects.SLOW_FALLING)) {
+         f.cryArrowTried++;
+         flog(f, "crystal pvp: no crystal spot, shooting a slow falling arrow so the target stays in the air");
+         f.cryStage = 60;
+         return true;
+      }
+
+      if (f.cryHitTried < 3 && BotSupport.findItemIndex(bot, Items.END_CRYSTAL) >= 0) {
+         if (dist > 3.4) {
+            if (dist <= 10.0) {
+               f.cryWait = now;
+               f.cryStage = 9;
+               return true;
+            }
+
+            return false;
+         }
+
+         BlockPos b = cryPickBaseImpl(bot, target, true);
+         if (b == null) {
+            return false;
+         }
+
+         f.cryHitTried++;
+         f.cryBase = b;
+         f.cryHitAfter = true;
+         f.cryAirLeft = 2;
+         flog(f, "crystal pvp: no crystal spot, hitting the target and spamming 2 crystals while it is in the air");
+         f.cryStage = BotSupport.sw(bot).getBlockState(b).isOf(Blocks.OBSIDIAN) ? 6 : 1;
+         return true;
+      }
+
+      return false;
+   }
+
+   /** the target (below the bot) is crystal-spamming it: shield up, then pearl away. */
+   static boolean cryShieldEscape(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
+      int now = PvpBotMod.globalTick;
+      if (f.phase != PvpBotMod.Phase.CRYSTAL) {
+         clearFightFlags(f);
+         f.phase = PvpBotMod.Phase.CRYSTAL;
+         f.cryStart = now;
+         f.cryMode = 1;
+         f.cryBase = null;
+         f.cryAnchor = null;
+         f.cryPoint = null;
+         f.cryNear = false;
+         f.cryBack = 0;
+         f.cryFound = -1;
+         f.cryCount = 0;
+         f.cryHitAfter = false;
+         f.cryAirLeft = 0;
+      }
+
+      BotSupport.run(server, "player " + name + " stop");
+      f.cryStage = 50;
+      f.cryNext = now;
+      flog(f, "crystal pvp: the target below is crystal-spamming the bot, shield up then pearl away");
+      return true;
    }
 
    /** the target teleported (ender pearl landed) or just threw a pearl: it is getting away. */
@@ -8165,6 +8475,11 @@ final class Fighting {
                }
             }
 
+            if (base == null && !f.cryNear && cryFallback(server, name, f, bot, target, dist)) {
+               f.cryNext = now + 1;
+               return;
+            }
+
             if (base == null) {
                f.cryNear = false;
                f.cryFails++;
@@ -8197,7 +8512,7 @@ final class Fighting {
             return;
          case 12:
             if (w.getBlockState(f.cryBase).isOf(Blocks.OBSIDIAN)) {
-               f.cryStage = f.cryNear ? 8 : 2;
+               f.cryStage = f.cryNear ? 8 : f.cryHitAfter ? 6 : 2;
                f.cryWait = now;
             } else {
                f.cryFails++;
@@ -8261,7 +8576,7 @@ final class Fighting {
 
             cryLook(server, name, f.cryBase.getX() + 0.5, f.cryBase.getY() + 1.0, f.cryBase.getZ() + 0.5);
             f.cryStage = 3;
-            f.cryNext = now + pd;
+            f.cryNext = now + (f.cryAirLeft > 0 ? 1 : pd);
             return;
          }
          case 3: {
@@ -8299,7 +8614,7 @@ final class Fighting {
             if (f.cryFound < 0) {
                f.cryFound = now;
                cryLook(server, name, c.getX(), c.getY() + 1.0, c.getZ());
-               f.cryNext = now + Math.max(1, PvpBotMod.CRYSTAL_BREAK_DELAY.asInt());
+               f.cryNext = now + (f.cryAirLeft > 0 ? 1 : Math.max(1, PvpBotMod.CRYSTAL_BREAK_DELAY.asInt()));
                return;
             }
 
@@ -8309,7 +8624,13 @@ final class Fighting {
             f.cryFound = -1;
             f.cryFails = 0;
             f.cryBack = 0;
-            f.cryStage = 0;
+            if (f.cryAirLeft > 0) {
+               f.cryAirLeft--;
+               f.cryStage = f.cryAirLeft > 0 ? 2 : 0;
+            } else {
+               f.cryStage = 0;
+            }
+
             f.cryNext = now + 1;
             return;
          }
@@ -8330,8 +8651,101 @@ final class Fighting {
                BotSupport.swing(f);
             }
 
+            if (f.cryHitAfter) {
+               f.cryHitAfter = false;
+               f.cryStage = 2;
+               f.cryNext = now + 1;
+               return;
+            }
+
             f.cryStage = 0;
             f.cryNext = now + 3;
+            return;
+         case 9:
+            if (dist <= 3.2 || now - f.cryWait > 30) {
+               BotSupport.run(server, "player " + name + " stop");
+               f.cryStage = 0;
+               f.cryNext = now + 1;
+               return;
+            }
+
+            BotSupport.run(server, "player " + name + " look upon " + tn + " eyes");
+            BotSupport.run(server, "player " + name + " move forward");
+            BotSupport.run(server, "player " + name + " sprint");
+            return;
+         case 50:
+            if (!cryHold(server, name, bot, Items.SHIELD)) {
+               f.cryNext = now + 1;
+               return;
+            }
+
+            BotSupport.run(server, "player " + name + " look upon " + tn + " eyes");
+            BotSupport.run(server, "player " + name + " use continuous");
+            f.cryStage = 51;
+            f.cryNext = now + 4;
+            return;
+         case 51:
+            BotSupport.run(server, "player " + name + " stop");
+            crystalEnd(server, name, f, "shield up, now pearling away");
+            if (!startPearlEscape(server, name, f, bot, target)) {
+               flog(f, "crystal pvp: no pearl to escape with");
+            }
+
+            return;
+         case 60: {
+            cryArrowFirst(bot);
+            int ci = slowCrossbowIndex(bot);
+            if (ci >= 0) {
+               f.cryStage = 62;
+               return;
+            }
+
+            int ui = findUnloadedCrossbow(bot);
+            int us = ui < 0 ? -1 : BotSupport.toHotbar(bot, ui, BotSupport.findWeaponSlot(bot));
+            if (us < 0) {
+               f.cryStage = 0;
+               f.cryNext = now + 2;
+               return;
+            }
+
+            f.cryPull = crossbowPullTicks(bot.getInventory().getStack(us));
+            BotSupport.run(server, "player " + name + " stop");
+            BotSupport.run(server, "player " + name + " hotbar " + (us + 1));
+            BotSupport.run(server, "player " + name + " use continuous");
+            f.cryStage = 61;
+            f.cryWait = now;
+            f.cryNext = now + 1;
+            return;
+         }
+         case 61:
+            if (now - f.cryWait >= f.cryPull) {
+               BotSupport.run(server, "player " + name + " use");
+               f.cryStage = 62;
+               f.cryNext = now + 3;
+            }
+
+            return;
+         case 62: {
+            int ci = slowCrossbowIndex(bot);
+            int cs = ci < 0 ? -1 : BotSupport.toHotbar(bot, ci, BotSupport.findWeaponSlot(bot));
+            if (cs < 0) {
+               f.cryStage = 0;
+               f.cryNext = now + 2;
+               return;
+            }
+
+            BotSupport.run(server, "player " + name + " hotbar " + (cs + 1));
+            BotSupport.run(server, "player " + name + " look upon " + tn + " eyes");
+            f.cryStage = 63;
+            f.cryNext = now + 2;
+            return;
+         }
+         case 63:
+            BotSupport.run(server, "player " + name + " look upon " + tn + " eyes");
+            BotSupport.useOnce(server, name, f);
+            flog(f, "crystal pvp: slow falling arrow fired");
+            f.cryStage = 0;
+            f.cryNext = now + 6;
             return;
          case 20:
             if (!cryHold(server, name, bot, Items.ENDER_PEARL)) {
@@ -8339,9 +8753,18 @@ final class Fighting {
                return;
             }
 
+            double pp0 = cryPearlPitch(f, bot, target);
+            if (Double.isNaN(pp0)) {
+               flog(f, "crystal pvp: no clear pearl arc, skipping the pearl");
+               f.cryPoint = null;
+               f.cryStage = 0;
+               f.cryNext = now + 2;
+               return;
+            }
+
             f.cryFrom = bot.getEntityPos();
             f.cryPearlNext = now + 200;
-            BotSupport.run(server, "player " + name + " look " + String.format(Locale.ROOT, "%.1f %.1f", cryPearlYaw(f, bot, target), cryPearlPitch(f, bot, target)));
+            BotSupport.run(server, "player " + name + " look " + String.format(Locale.ROOT, "%.1f %.1f", cryPearlYaw(f, bot, target), pp0));
             f.cryStage = 21;
             f.cryNext = now + 2;
             return;
@@ -8508,7 +8931,7 @@ final class Fighting {
             Vec3d crater = new Vec3d(f.cryAnchor.getX() + 0.5, f.cryAnchor.getY() + 0.5, f.cryAnchor.getZ() + 0.5);
             f.cryAnchor = null;
             f.cryPoint = crater;
-            if (BotSupport.findItemIndex(bot, Items.ENDER_PEARL) >= 0 && !Double.isNaN(pearlPitchAt(bot, crater.x, crater.y, crater.z))) {
+            if (BotSupport.findItemIndex(bot, Items.ENDER_PEARL) >= 0 && !Double.isNaN(pearlPitchClearAt(bot, crater.x, crater.y, crater.z))) {
                f.cryStage = 20;
                f.cryNext = now + 1;
                flog(f, "crystal pvp: pearling below the hole the anchor made, then crystals upward");
