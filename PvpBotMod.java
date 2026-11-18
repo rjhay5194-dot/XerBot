@@ -485,6 +485,8 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt CRYSTAL_MIN_HP = opt("crystalminhp", "crystal_min_health", 10.0, 2.0, 20.0, false, "health points: crystal PvP does not start below this and stops at half of it");
    static final PvpBotMod.Opt CRYSTAL_COOLDOWN = opt("crystalcooldown", "crystal_cooldown", 10.0, 0.0, 2000.0, false, "ticks before the bot starts crystal PvP again");
    static final PvpBotMod.Opt CRYSTAL_PEARL_KNOCK = opt("crystalpearl", "crystal_pearl_knock", 80.0, 0.0, 100.0, false, "percent chance the bot ender pearls to a target the crystal explosions knocked away, hits it and goes back to crystals");
+   static final PvpBotMod.Opt PRACTICE_RANGE = opt("practicerange", "practice_range", 24.0, 8.0, 48.0, false, "/pvpbot practice: blocks around the fight (in every direction) that are remembered and reset after each round");
+   static final PvpBotMod.Opt PRACTICE_FREEZE = opt("practicefreeze", "practice_freeze", 3.0, 1.0, 15.0, false, "/pvpbot practice: seconds the bot is frozen before each round starts");
    static final PvpBotMod.Opt CRYSTAL_ALWAYS_PEARL = opt("crystalalwayspearl", "crystal_always_pearl", 100.0, 0.0, 100.0, false, "percent chance the bot ender pearls next to the target whenever it is more than 3.5 blocks away before crystal pvp (pearl, hit, then 2 fast crystals). 0 = only pearl when it is more than 6.5 blocks away");
    static final PvpBotMod.Opt CRYSTAL_HEAL_PEARL = opt("crystalhealpearl", "crystal_heal_pearl", 100.0, 0.0, 100.0, false, "percent chance the bot ender pearls away when it wants to heal while a crystal / anchor target is close (so it cannot be crystal-spammed while it eats). The bot has totems, damage is ignored");
    static final PvpBotMod.Opt CRYSTAL_HEAD_ANCHOR = opt("crystalheadanchor", "crystal_head_anchor", 1.0, 0.0, 1.0, true, "when the target is 1 block higher (or 5-9 blocks away) and no obsidian spot hurts it enough, the bot places the anchor at its head level close to the target's feet with no obsidian shield, then walks / pearls into the crater and crystal-spams from below");
@@ -1335,6 +1337,7 @@ public class PvpBotMod implements ModInitializer {
       ServerLifecycleEvents.SERVER_STOPPED.register((ServerStopped)server -> {
          flushLog();
          Kits.clearMemory();
+         Practice.active = false;
          BOTS.clear();
          STOPPED.clear();
          FIGHTS.clear();
@@ -1637,6 +1640,7 @@ public class PvpBotMod implements ModInitializer {
             .then(CommandManager.argument("seconds", IntegerArgumentType.integer(5, 3600)).executes(ctx -> repairCmd(ctx, IntegerArgumentType.getInteger(ctx, "seconds"))))
       );
       root.then(Arena.node());
+      root.then(Practice.node());
       Replay.register(root);
       root.then(
          ((LiteralArgumentBuilder)CommandManager.literal("difficulty").executes(PvpBotMod::showDifficulty))
@@ -5607,6 +5611,7 @@ final class BotSupport {
       tickFfa(server);
       Tournament.tick(server);
       Arena.tick(server);
+      Practice.tick(server);
       PvpBotMod.pathBudgetLeft = PvpBotMod.PATH_BUDGET.asInt();
       PvpBotMod.gotoBudgetLeft = PvpBotMod.GOTO_BUDGET.asInt();
       if (!PvpBotMod.BOTS.isEmpty()) {
@@ -18829,7 +18834,7 @@ final class Gui {
       catIcon("Extras", Items.SHIELD);
       cat("Auto Survival", "survivestop", "survivelogs", "survivestone", "survivefight", "survivethreatdist", "surviveloot", "survivemobs");
       catIcon("Auto Survival", Items.IRON_PICKAXE);
-      cat("Crystal", "crystal", "crystalescape", "crystalescapedmg", "crystalprephp", "crystalbackoff", "crystalchance", "crystalplacedelay", "crystalbreakdelay", "crystalmaxself", "crystalminhp", "crystalcooldown", "crystalpearl", "crystalalwayspearl", "crystalhealpearl", "crystalheadanchor", "anchorchance", "anchorcooldown", "totemswapdelay");
+      cat("Crystal", "crystal", "crystalescape", "crystalescapedmg", "crystalprephp", "crystalbackoff", "crystalchance", "crystalplacedelay", "crystalbreakdelay", "crystalmaxself", "crystalminhp", "crystalcooldown", "crystalpearl", "crystalalwayspearl", "crystalhealpearl", "crystalheadanchor", "practicerange", "practicefreeze", "anchorchance", "anchorcooldown", "totemswapdelay");
       cat("Replay", "autorecord", "recordmax", "spechud", "hudicons");
       cat("Tiers", "nametagtiers");
       cat("TNT Cart", "tntcart", "tntcartchance", "tntcartneutral", "cartdefense", "cartdefensedist", "cartbreakchance", "cartdefensedelay", "cartmode", "cartfinishhp", "cartminhp", "cartpunish", "tntcartsafedist", "tntcartdrawticks", "tntcartcooldown", "xcartpreload", "xcartchance", "pearlcartchance", "cartdefensedelaymax", "cartdefensemiss", "walldef", "walldefchance");
@@ -23838,6 +23843,385 @@ final class Arena {
  * /pvpbot survive <bot> [wood|stone|iron|diamond|pvp] (the later stages come in the next update).
  * Mining and crafting are done server side (blocks are broken with the real mining time of the tool in hand, crafting uses the inventory directly).
  */
+/**
+ * /pvpbot practice: crystal practice rounds against one bot. You give yourself and the bot a kit yourself, then start: the inventories, positions and the
+ * surrounding blocks are remembered. When one of you loses, every block that changed (crater, exploded blocks, placed blocks, water, fire), the dropped items,
+ * crystals and arrows are reset, both kits come back, both fighters go back to where they started and the next round starts after a short countdown.
+ */
+final class Practice {
+   static boolean active;
+   static String ownerName;
+   static String botName;
+   static net.minecraft.server.world.ServerWorld world;
+   static Tournament.Kit ownerKit;
+   static Tournament.Kit botKit;
+   static Vec3d ownerPos;
+   static Vec3d botPos;
+   static float ownerYaw;
+   static float botYaw;
+   static BlockPos boxMin;
+   static BlockPos boxMax;
+   static BlockState[] saved;
+   static int state; // 1 countdown, 2 fighting, 3 round over (waiting for both to be alive)
+   static int stateStart;
+   static int lastSec;
+   static int round;
+   static int ownerWins;
+   static int botWins;
+
+   private Practice() {
+   }
+
+   static LiteralArgumentBuilder<ServerCommandSource> node() {
+      return CommandManager.literal("practice")
+         .then(
+            CommandManager.literal("start")
+               .then(
+                  CommandManager.argument("bot", StringArgumentType.word())
+                     .suggests(PvpBotMod.BOT_NAMES)
+                     .executes(ctx -> start(ctx, StringArgumentType.getString(ctx, "bot")))
+               )
+         )
+         .then(CommandManager.literal("stop").executes(ctx -> stop(ctx, false)).then(CommandManager.literal("reset").executes(ctx -> stop(ctx, true))))
+         .then(CommandManager.literal("restart").executes(ctx -> restart(ctx)))
+         .then(CommandManager.literal("kit").executes(ctx -> resnap(ctx)))
+         .then(CommandManager.literal("status").executes(ctx -> {
+            if (!active) {
+               return reply(ctx, "No practice round running. Give yourself and the bot a kit, then /pvpbot practice start <bot>.");
+            }
+
+            return reply(ctx, "Practice vs " + botName + ": round " + round + ", you " + ownerWins + " - " + botWins + " bot, " + new String[]{"", "countdown", "fighting", "reset pending"}[state] + ".");
+         }));
+   }
+
+   static int reply(CommandContext<ServerCommandSource> ctx, String text) {
+      ctx.getSource().sendFeedback(() -> Text.literal("[Practice] " + text), false);
+      return 1;
+   }
+
+   static int err(CommandContext<ServerCommandSource> ctx, String text) {
+      ctx.getSource().sendError(Text.literal("[Practice] " + text));
+      return 0;
+   }
+
+   static int start(CommandContext<ServerCommandSource> ctx, String bot) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+      MinecraftServer server = ctx.getSource().getServer();
+      ServerPlayerEntity me = ctx.getSource().getPlayerOrThrow();
+      ServerPlayerEntity b = server.getPlayerManager().getPlayer(bot);
+      if (b == null) {
+         return err(ctx, "No bot named " + bot + " is online.");
+      }
+
+      if (b == me || !PvpBotMod.BOTS.contains(b.getName().getString())) {
+         return err(ctx, bot + " is not a pvpbot.");
+      }
+
+      if (active) {
+         return err(ctx, "A practice is already running. /pvpbot practice stop first.");
+      }
+
+      if (me.isCreative() || me.isSpectator()) {
+         return err(ctx, "Switch to survival first, creative players cannot lose a round.");
+      }
+
+      if (BotSupport.sw(b) != BotSupport.sw(me)) {
+         return err(ctx, "You and the bot must be in the same dimension.");
+      }
+
+      active = true;
+      ownerName = me.getName().getString();
+      botName = b.getName().getString();
+      world = BotSupport.sw(me);
+      round = 1;
+      ownerWins = 0;
+      botWins = 0;
+      ownerKit = Tournament.snapshot(me);
+      botKit = Tournament.snapshot(b);
+      ownerPos = new Vec3d(me.getX(), me.getY(), me.getZ());
+      botPos = new Vec3d(b.getX(), b.getY(), b.getZ());
+      ownerYaw = me.getYaw();
+      botYaw = b.getYaw();
+      snapshotBlocks(me, b);
+      PvpBotMod.BOTS.add(botName);
+      beginCountdown(server);
+      return reply(ctx, "Practice started: " + ownerName + " vs " + botName + ". Your kits and " + (saved == null ? 0 : saved.length) + " blocks around you are remembered; every round resets them.");
+   }
+
+   static int stop(CommandContext<ServerCommandSource> ctx, boolean reset) {
+      if (!active) {
+         return err(ctx, "No practice running.");
+      }
+
+      MinecraftServer server = ctx.getSource().getServer();
+      release(server);
+      if (reset) {
+         resetWorld(server);
+         ServerPlayerEntity o = server.getPlayerManager().getPlayer(ownerName);
+         ServerPlayerEntity b = server.getPlayerManager().getPlayer(botName);
+         if (Tournament.alive(o)) {
+            Tournament.restoreKit(server, o, ownerKit);
+         }
+
+         if (Tournament.alive(b)) {
+            Tournament.restoreKit(server, b, botKit);
+         }
+      }
+
+      active = false;
+      saved = null;
+      return reply(ctx, "Practice stopped (you " + ownerWins + " - " + botWins + " bot)." + (reset ? " Blocks and kits were reset." : ""));
+   }
+
+   static int restart(CommandContext<ServerCommandSource> ctx) {
+      if (!active) {
+         return err(ctx, "No practice running.");
+      }
+
+      release(ctx.getSource().getServer());
+      state = 3;
+      stateStart = PvpBotMod.globalTick - 100;
+      return reply(ctx, "Restarting the round.");
+   }
+
+   static int resnap(CommandContext<ServerCommandSource> ctx) {
+      if (!active) {
+         return err(ctx, "No practice running.");
+      }
+
+      MinecraftServer server = ctx.getSource().getServer();
+      ServerPlayerEntity o = server.getPlayerManager().getPlayer(ownerName);
+      ServerPlayerEntity b = server.getPlayerManager().getPlayer(botName);
+      if (!Tournament.alive(o) || !Tournament.alive(b)) {
+         return err(ctx, "Both of you must be alive to save the kits.");
+      }
+
+      ownerKit = Tournament.snapshot(o);
+      botKit = Tournament.snapshot(b);
+      return reply(ctx, "Saved your current kits as the new round kits.");
+   }
+
+   static void snapshotBlocks(ServerPlayerEntity a, ServerPlayerEntity b) {
+      int r = PvpBotMod.PRACTICE_RANGE.asInt();
+      int cx = (int)Math.floor((a.getX() + b.getX()) / 2.0);
+      int cz = (int)Math.floor((a.getZ() + b.getZ()) / 2.0);
+      int lo = (int)Math.floor(Math.min(a.getY(), b.getY())) - 14;
+      int hi = (int)Math.floor(Math.max(a.getY(), b.getY())) + 18;
+      lo = Math.max(lo, world.getBottomY());
+      hi = Math.min(hi, world.getBottomY() + world.getHeight() - 1);
+      boxMin = new BlockPos(cx - r, lo, cz - r);
+      boxMax = new BlockPos(cx + r, hi, cz + r);
+      int sx = boxMax.getX() - boxMin.getX() + 1;
+      int sy = boxMax.getY() - boxMin.getY() + 1;
+      int sz = boxMax.getZ() - boxMin.getZ() + 1;
+      saved = new BlockState[sx * sy * sz];
+      BlockPos.Mutable m = new BlockPos.Mutable();
+      int i = 0;
+      for (int x = 0; x < sx; x++) {
+         for (int y = 0; y < sy; y++) {
+            for (int z = 0; z < sz; z++, i++) {
+               int wx = boxMin.getX() + x;
+               int wz = boxMin.getZ() + z;
+               saved[i] = world.isChunkLoaded(wx >> 4, wz >> 4) ? world.getBlockState(m.set(wx, boxMin.getY() + y, wz)) : null;
+            }
+         }
+      }
+   }
+
+   /** puts every changed block back, removes dropped items, crystals, projectiles and primed TNT in the area. */
+   static void resetWorld(MinecraftServer server) {
+      if (saved == null) {
+         return;
+      }
+
+      int sx = boxMax.getX() - boxMin.getX() + 1;
+      int sy = boxMax.getY() - boxMin.getY() + 1;
+      int sz = boxMax.getZ() - boxMin.getZ() + 1;
+      BlockPos.Mutable m = new BlockPos.Mutable();
+      int i = 0;
+      for (int x = 0; x < sx; x++) {
+         for (int y = 0; y < sy; y++) {
+            for (int z = 0; z < sz; z++, i++) {
+               BlockState want = saved[i];
+               if (want == null) {
+                  continue;
+               }
+
+               m.set(boxMin.getX() + x, boxMin.getY() + y, boxMin.getZ() + z);
+               BlockState cur = world.getBlockState(m);
+               if (cur != want && !BotSupport.skipRepair(want) && !BotSupport.skipRepair(cur)) {
+                  world.setBlockState(m, want, 2 | 16 | 32);
+               }
+            }
+         }
+      }
+
+      Box box = new Box(boxMin.getX() - 4.0, boxMin.getY() - 4.0, boxMin.getZ() - 4.0, boxMax.getX() + 5.0, boxMax.getY() + 5.0, boxMax.getZ() + 5.0);
+      for (ItemEntity e : world.getEntitiesByClass(ItemEntity.class, box, x -> true)) {
+         e.discard();
+      }
+
+      for (net.minecraft.entity.ExperienceOrbEntity e : world.getEntitiesByClass(net.minecraft.entity.ExperienceOrbEntity.class, box, x -> true)) {
+         e.discard();
+      }
+
+      for (net.minecraft.entity.decoration.EndCrystalEntity e : world.getEntitiesByClass(net.minecraft.entity.decoration.EndCrystalEntity.class, box, x -> true)) {
+         e.discard();
+      }
+
+      for (net.minecraft.entity.projectile.ProjectileEntity e : world.getEntitiesByClass(net.minecraft.entity.projectile.ProjectileEntity.class, box, x -> true)) {
+         e.discard();
+      }
+
+      for (net.minecraft.entity.TntEntity e : world.getEntitiesByClass(net.minecraft.entity.TntEntity.class, box, x -> true)) {
+         e.discard();
+      }
+
+      for (PvpBotMod.PlacedWeb web : new ArrayList<>(PvpBotMod.PLACED_WEBS)) {
+         if (web.level == world && web.level.getBlockState(web.pos).isOf(Blocks.COBWEB)) {
+            web.level.setBlockState(web.pos, Blocks.AIR.getDefaultState(), 3);
+         }
+      }
+
+      PvpBotMod.PLACED_WEBS.clear();
+   }
+
+   /** the bot stands still and stops fighting. */
+   static void release(MinecraftServer server) {
+      PvpBotMod.FIGHTS.remove(botName);
+      PvpBotMod.STOPPED.add(botName);
+      if (server.getPlayerManager().getPlayer(botName) != null) {
+         BotSupport.run(server, "player " + botName + " stop");
+      }
+   }
+
+   static void beginCountdown(MinecraftServer server) {
+      state = 1;
+      stateStart = PvpBotMod.globalTick;
+      lastSec = -1;
+      release(server);
+   }
+
+   static void tick(MinecraftServer server) {
+      if (!active) {
+         return;
+      }
+
+      int now = PvpBotMod.globalTick;
+      ServerPlayerEntity o = server.getPlayerManager().getPlayer(ownerName);
+      if (o == null) {
+         release(server);
+         active = false;
+         saved = null;
+         return;
+      }
+
+      int elapsed = now - stateStart;
+      if (state == 1) {
+         ServerPlayerEntity b = server.getPlayerManager().getPlayer(botName);
+         if (!Tournament.alive(o) || !Tournament.alive(b)) {
+            state = 3;
+            stateStart = now;
+            return;
+         }
+
+         if (now % 4 == 0) {
+            BotSupport.run(server, "player " + botName + " stop");
+         }
+
+         int total = Math.max(1, PvpBotMod.PRACTICE_FREEZE.asInt()) * 20;
+         int remaining = (int)Math.ceil((total - elapsed) / 20.0);
+         if (remaining > 0 && remaining != lastSec) {
+            lastSec = remaining;
+            server.getPlayerManager().broadcast(Text.literal("Round " + round + " in " + remaining + "..."), true);
+         }
+
+         if (elapsed >= total) {
+            PvpBotMod.STOPPED.remove(botName);
+            PvpBotMod.FIGHTS.put(botName, new PvpBotMod.Fight(ownerName));
+            server.getPlayerManager().broadcast(Text.literal("Round " + round + ": fight!  you " + ownerWins + " - " + botWins + " bot"), true);
+            state = 2;
+            stateStart = now;
+         }
+      } else if (state == 2) {
+         if (now % 5 != 0) {
+            return;
+         }
+
+         ServerPlayerEntity b = server.getPlayerManager().getPlayer(botName);
+         boolean ownerUp = Tournament.alive(o);
+         boolean botUp = Tournament.alive(b);
+         if (ownerUp && botUp) {
+            PvpBotMod.Fight f = PvpBotMod.FIGHTS.get(botName);
+            if (f == null || !ownerName.equals(f.target)) {
+               PvpBotMod.STOPPED.remove(botName);
+               PvpBotMod.FIGHTS.put(botName, new PvpBotMod.Fight(ownerName));
+            }
+
+            return;
+         }
+
+         release(server);
+         String msg;
+         if (!ownerUp && !botUp) {
+            msg = "Both down, round " + round + " is a draw.";
+         } else if (!ownerUp) {
+            botWins++;
+            msg = botName + " won round " + round + ".";
+         } else {
+            ownerWins++;
+            msg = "You won round " + round + "!";
+         }
+
+         BotSupport.broadcast(server, "[Practice] " + msg + "  you " + ownerWins + " - " + botWins + " bot. Resetting...");
+         round++;
+         state = 3;
+         stateStart = now;
+      } else if (state == 3) {
+         if (elapsed < 50 || now % 5 != 0) {
+            return;
+         }
+
+         ServerPlayerEntity b = server.getPlayerManager().getPlayer(botName);
+         if (b == null) {
+            if (!PvpBotMod.PENDING.containsKey(botName)) {
+               server.getCommandManager().parseAndExecute(o.getCommandSource().withSilent(), "playerspawn " + botName);
+               PvpBotMod.PENDING.put(botName, new PvpBotMod.Pending(ownerName, true, null, botPos));
+            }
+
+            return;
+         }
+
+         if (!Tournament.alive(b)) {
+            if (elapsed > 100) {
+               PvpBotMod.removeBot(server, botName);
+            }
+
+            return;
+         }
+
+         if (!Tournament.alive(o) || PvpBotMod.PENDING.containsKey(botName)) {
+            return;
+         }
+
+         resetRound(server, o, b);
+      }
+   }
+
+   static void resetRound(MinecraftServer server, ServerPlayerEntity o, ServerPlayerEntity b) {
+      PvpBotMod.BOTS.add(botName);
+      resetWorld(server);
+      BotSupport.run(server, "gamemode survival " + ownerName);
+      BotSupport.run(server, "gamemode survival " + botName);
+      Tournament.restoreKit(server, o, ownerKit);
+      Tournament.restoreKit(server, b, botKit);
+      BotSupport.run(server, "tp " + ownerName + " " + BotSupport.fmt(ownerPos.x) + " " + BotSupport.fmt(ownerPos.y) + " " + BotSupport.fmt(ownerPos.z) + " " + BotSupport.fmt(ownerYaw) + " 0");
+      BotSupport.run(server, "tp " + botName + " " + BotSupport.fmt(botPos.x) + " " + BotSupport.fmt(botPos.y) + " " + BotSupport.fmt(botPos.z) + " " + BotSupport.fmt(botYaw) + " 0");
+      PvpBotMod.GOTOS.remove(botName);
+      PvpBotMod.LOOTING.remove(botName);
+      beginCountdown(server);
+   }
+}
+
 final class Survival {
    static final java.util.Map<String, Job> JOBS = new java.util.TreeMap<>(String.CASE_INSENSITIVE_ORDER);
    static final String[] STOP_NAMES = new String[]{"wood", "stone", "iron", "diamond", "pvp"};
