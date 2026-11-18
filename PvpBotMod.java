@@ -485,6 +485,9 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt CRYSTAL_MIN_HP = opt("crystalminhp", "crystal_min_health", 10.0, 2.0, 20.0, false, "health points: crystal PvP does not start below this and stops at half of it");
    static final PvpBotMod.Opt CRYSTAL_COOLDOWN = opt("crystalcooldown", "crystal_cooldown", 10.0, 0.0, 2000.0, false, "ticks before the bot starts crystal PvP again");
    static final PvpBotMod.Opt CRYSTAL_PEARL_KNOCK = opt("crystalpearl", "crystal_pearl_knock", 80.0, 0.0, 100.0, false, "percent chance the bot ender pearls to a target the crystal explosions knocked away, hits it and goes back to crystals");
+   static final PvpBotMod.Opt CRYSTAL_ALWAYS_PEARL = opt("crystalalwayspearl", "crystal_always_pearl", 100.0, 0.0, 100.0, false, "percent chance the bot ender pearls next to the target whenever it is more than 3.5 blocks away before crystal pvp (pearl, hit, then 2 fast crystals). 0 = only pearl when it is more than 6.5 blocks away");
+   static final PvpBotMod.Opt CRYSTAL_HEAL_PEARL = opt("crystalhealpearl", "crystal_heal_pearl", 100.0, 0.0, 100.0, false, "percent chance the bot ender pearls away when it wants to heal while a crystal / anchor target is close (so it cannot be crystal-spammed while it eats). The bot has totems, damage is ignored");
+   static final PvpBotMod.Opt CRYSTAL_HEAD_ANCHOR = opt("crystalheadanchor", "crystal_head_anchor", 1.0, 0.0, 1.0, true, "when the target is 1 block higher (or 5-9 blocks away) and no obsidian spot hurts it enough, the bot places the anchor at its head level close to the target's feet with no obsidian shield, then walks / pearls into the crater and crystal-spams from below");
    static final PvpBotMod.Opt ANCHOR_CHANCE = opt("anchorchance", "anchor_chance", 100.0, 0.0, 100.0, false, "on flat open ground (outside the Nether) percent chance to do the anchor combo: anchor, glowstone, obsidian shield, detonate with a sword");
    static final PvpBotMod.Opt ANCHOR_COOLDOWN = opt("anchorcooldown", "anchor_cooldown", 60.0, 20.0, 6000.0, false, "ticks before the bot does the anchor combo again");
    static final PvpBotMod.Opt TOTEM_SWAP_DELAY = opt("totemswapdelay", "totem_swap_delay", 8.0, 0.0, 40.0, false, "ticks the bot waits (plus up to half again at random) before moving a totem to the offhand, also after a pop; 0 = instant");
@@ -2959,7 +2962,9 @@ public class PvpBotMod implements ModInitializer {
       boolean webSneak;
       int apprNext;
       int crouchUntil;
-      int cryStage, cryMode, cryStart, cryNext, cryCool, cryFails, cryCount, cryPearlNext, cryAnchorCool, cryFound, cryWait;
+      int cryStage, cryMode, cryStart, cryNext, cryCool, cryFails, cryCount, cryPearlNext, cryAnchorCool, cryFound, cryWait, cryHealPearlNext, cryWalkStart;
+      boolean cryHead;
+      Vec3d cryCrater;
       BlockPos cryBase, cryAnchor, cryGuard;
       boolean cryWalking;
       int cryBack;
@@ -3654,6 +3659,11 @@ final class BotSupport {
 
    /** true while a Speed II (or higher) bot must not jump or crit: it needs a run of landed hits first. */
    static boolean speedNoJump(ServerPlayerEntity bot, PvpBotMod.Fight f) {
+      // crystal (vanilla) bots never jump or jump-crit: it is dangerous in crystal pvp
+      if (bot != null && f != null && PvpBotMod.CRYSTAL.on() && findItemIndex(bot, Items.END_CRYSTAL) >= 0) {
+         return true;
+      }
+
       if (!PvpBotMod.SPEED_NOJUMP.on() || bot == null || f == null) {
          return false;
       }
@@ -7757,6 +7767,117 @@ final class Fighting {
       return new BlockPos[]{a, o};
    }
 
+   /** anchor + glowstone, no obsidian needed (head-level anchor has no shield). Not in the Nether. */
+   static boolean cryHeadKit(ServerPlayerEntity bot) {
+      return PvpBotMod.CRYSTAL_HEAD_ANCHOR.on() && BotSupport.sw(bot).getRegistryKey() != World.NETHER
+         && BotSupport.findItemIndex(bot, Items.RESPAWN_ANCHOR) >= 0 && BotSupport.findItemIndex(bot, Items.GLOWSTONE) >= 0;
+   }
+
+   /** true when the target stands about 1 block higher than the bot. */
+   static boolean cryOneHigher(ServerPlayerEntity bot, ServerPlayerEntity target) {
+      double dy = target.getY() - bot.getY();
+      return dy >= 0.6 && dy <= 1.6;
+   }
+
+   /** no solid block between the bot's eyes and the point p. */
+   static boolean cryLineClear(ServerPlayerEntity bot, Vec3d p) {
+      net.minecraft.server.world.ServerWorld w = BotSupport.sw(bot);
+      Vec3d eye = bot.getEyePos();
+      double len = eye.distanceTo(p);
+      int n = Math.max(2, (int)(len * 4.0));
+      for (int i = 1; i < n; i++) {
+         double t = i / (double)n;
+         BlockPos bp = BlockPos.ofFloored(eye.x + (p.x - eye.x) * t, eye.y + (p.y - eye.y) * t, eye.z + (p.z - eye.z) * t);
+         if (!w.getBlockState(bp).getCollisionShape(w, bp).isEmpty()) {
+            return false;
+         }
+      }
+
+      return true;
+   }
+
+   /**
+    * head-level anchor spot: a free cell (air above a solid floor) the bot can reach, as close as possible to the target's feet. When the target is 1 block
+    * higher this is the cell at the bot's head level. No obsidian shield: the higher ground keeps the blast off the bot. null if none.
+    */
+   static BlockPos cryHeadSpot(ServerPlayerEntity bot, ServerPlayerEntity target) {
+      net.minecraft.server.world.ServerWorld w = BotSupport.sw(bot);
+      BlockPos feet = bot.getBlockPos();
+      Vec3d eye = bot.getEyePos();
+      Vec3d tf = new Vec3d(target.getX(), target.getY(), target.getZ());
+      BlockPos best = null;
+      double bd = 1.0E9;
+      for (int dx = -4; dx <= 4; dx++) {
+         for (int dz = -4; dz <= 4; dz++) {
+            for (int dy = 0; dy <= 1; dy++) {
+               BlockPos cell = feet.add(dx, dy, dz);
+               if (dx == 0 && dz == 0 || dx == 0 && dz == 0 && dy == 1) {
+                  continue;
+               }
+
+               if (!cryFree(w, cell, target) || !w.getBlockState(cell.up(2)).isAir()) {
+                  continue;
+               }
+
+               Vec3d floorTop = new Vec3d(cell.getX() + 0.5, cell.getY(), cell.getZ() + 0.5);
+               if (eye.distanceTo(floorTop) > 4.4 || !cryLineClear(bot, floorTop.add(0.0, 0.05, 0.0))) {
+                  continue;
+               }
+
+               double d = tf.distanceTo(new Vec3d(cell.getX() + 0.5, cell.getY(), cell.getZ() + 0.5));
+               if (d > 6.5 || d < 0.9) {
+                  continue;
+               }
+
+               // prefer the target's own feet level (the bot's head level when the target is 1 higher)
+               double score = d + Math.abs(cell.getY() - target.getBlockY()) * 0.8;
+               if (score < bd) {
+                  bd = score;
+                  best = cell;
+               }
+            }
+         }
+      }
+
+      return best;
+   }
+
+   /** the target is crystal / anchor spamming (or holding the kit) and close: the bot ender pearls away to heal instead of being stuck healing. */
+   static boolean cryHealPearl(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist, boolean needHurt) {
+      int now = PvpBotMod.globalTick;
+      if (!PvpBotMod.CRYSTAL.on() || PvpBotMod.CRYSTAL_HEAL_PEARL.value <= 0.0 || now < f.cryHealPearlNext || dist > 9.0 || BotSupport.inCobweb(bot)
+         || BotSupport.findItemIndex(bot, Items.ENDER_PEARL) < 0 || bot.getItemCooldownManager().isCoolingDown(Items.ENDER_PEARL.getDefaultStack())) {
+         return false;
+      }
+
+      ItemStack th = target.getMainHandStack();
+      boolean kit = th.isOf(Items.END_CRYSTAL) || th.isOf(Items.RESPAWN_ANCHOR) || th.isOf(Items.GLOWSTONE);
+      if (!kit) {
+         kit = !BotSupport.sw(bot).getEntitiesByClass(net.minecraft.entity.decoration.EndCrystalEntity.class, bot.getBoundingBox().expand(9.0), e -> true).isEmpty();
+      }
+
+      if (!kit && !(f.cryDmgWin > 4.0)) {
+         return false;
+      }
+
+      if (needHurt && now - Math.max(f.lastHurtTick, f.pressHurtTick) > 20) {
+         return false;
+      }
+
+      f.cryHealPearlNext = now + 160;
+      if (!chance(PvpBotMod.CRYSTAL_HEAL_PEARL.value)) {
+         return false;
+      }
+
+      if (f.phase == PvpBotMod.Phase.CRYSTAL) {
+         crystalEnd(server, name, f, "healing, pearling away");
+      }
+
+      BotSupport.run(server, "player " + name + " use");
+      flog(f, "crystal pvp: the target is close and can crystal-spam the bot while it heals, pearling away (totems cover the damage)");
+      return startPearlEscape(server, name, f, bot, target);
+   }
+
    /** starts the crystal phase. mode 1 = high ground, 3 = anchor combo, 4 = flat crystals. Returns null when started, else the reason. */
    static String crystalBegin(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, int mode) {
       return crystalBegin(server, name, f, bot, target, mode, false);
@@ -7772,7 +7893,8 @@ final class Fighting {
       }
 
       if (far) {
-         if (BotSupport.findItemIndex(bot, Items.ENDER_PEARL) < 0 || Double.isNaN(pearlPitch(bot, target)) || !bot.canSee(target)) {
+         if (BotSupport.findItemIndex(bot, Items.ENDER_PEARL) < 0 || Double.isNaN(pearlPitch(bot, target)) || !bot.canSee(target)
+            || bot.getItemCooldownManager().isCoolingDown(Items.ENDER_PEARL.getDefaultStack())) {
             return "no ender pearl / no clear throw to the target";
          }
       } else if (mode == 3) {
@@ -7780,6 +7902,8 @@ final class Fighting {
             return "anchors only explode outside the Nether";
          } else if (BotSupport.findItemIndex(bot, Items.RESPAWN_ANCHOR) < 0 || BotSupport.findItemIndex(bot, Items.GLOWSTONE) < 0) {
             return "no respawn anchor / glowstone";
+         } else if (cryHeadKit(bot) && cryHeadSpot(bot, target) != null) {
+            // head-level anchor: no obsidian needed
          } else if (BotSupport.findItemIndex(bot, Items.OBSIDIAN) < 0) {
             return "no obsidian";
          } else if (cryAnchorSpot(bot, target) == null) {
@@ -7804,8 +7928,10 @@ final class Fighting {
       f.cryArrowTried = 0;
       f.cryHitTried = 0;
       f.cryAnchored = false;
+      f.cryHead = false;
+      f.cryCrater = null;
       f.cryTValid = false;
-      f.cryTCd = target.getItemCooldownManager().isCoolingDown(Items.ENDER_PEARL.getDefaultStack());
+      f.cryTCd =target.getItemCooldownManager().isCoolingDown(Items.ENDER_PEARL.getDefaultStack());
       f.phase = PvpBotMod.Phase.CRYSTAL;
       f.cryMode = mode;
       f.cryStage = 0;
@@ -8144,6 +8270,12 @@ final class Fighting {
    /** no way to crystal the target from here: anchor, slow falling arrow, or hit it and crystal it while it is in the air. true = a stage was set. */
    static boolean cryFallback(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
       int now = PvpBotMod.globalTick;
+      if (!f.cryAnchored && cryHeadKit(bot) && dist <= 9.0 && cryHeadSpot(bot, target) != null) {
+         flog(f, "crystal pvp: no crystal spot, head-level anchor instead");
+         f.cryMode = 3;
+         return true;
+      }
+
       if (!f.cryAnchored && cryAnchorKit(bot) && dist <= 8.0 && cryAnchorSpot(bot, target) != null) {
          flog(f, "crystal pvp: no crystal spot, doing the anchor instead");
          f.cryMode = 3;
@@ -8307,19 +8439,31 @@ final class Fighting {
          }
       }
 
-      if (dist > 6.5) {
-         // too far to place anything: pearl to the target first
-         if (crystalBegin(server, name, f, bot, target, mode, true) != null) {
-            f.cryCool = now + 60;
-            return false;
+      boolean pearlIn = dist > 3.5 && PvpBotMod.CRYSTAL_ALWAYS_PEARL.value > 0.0 && chance(PvpBotMod.CRYSTAL_ALWAYS_PEARL.value);
+      if (dist > 6.5 || pearlIn) {
+         // far: always pearl next to the target first (pearl, hit, then fast crystals / anchor)
+         if (mode == 1 && cryHeadKit(bot) && BotSupport.findItemIndex(bot, Items.OBSIDIAN) < 0) {
+            mode = 3;
          }
 
-         return true;
+         if (crystalBegin(server, name, f, bot, target, mode, true) != null) {
+            if (dist > 6.5) {
+               f.cryCool = now + 60;
+               return false;
+            }
+            // no pearl possible: fall through to the normal close-range start
+         } else {
+            return true;
+         }
       }
 
       String why = crystalBegin(server, name, f, bot, target, mode);
       if (why != null && mode == 3 && target.getY() - bot.getY() >= 0.6) {
          why = crystalBegin(server, name, f, bot, target, 1);
+      }
+
+      if (why != null && mode == 1 && cryHeadKit(bot) && (cryOneHigher(bot, target) || dist >= 5.0)) {
+         why = crystalBegin(server, name, f, bot, target, 3);
       }
 
       if (why != null) {
@@ -8405,7 +8549,16 @@ final class Fighting {
             }
 
             if (f.cryMode == 3) {
-               BlockPos[] spot = cryAnchorSpot(bot, target);
+               BlockPos[] spot = null;
+               BlockPos hs = cryHeadKit(bot) ? cryHeadSpot(bot, target) : null;
+               if (hs != null) {
+                  spot = new BlockPos[]{hs, null};
+                  f.cryHead = true;
+               } else if (BotSupport.findItemIndex(bot, Items.OBSIDIAN) >= 0) {
+                  spot = cryAnchorSpot(bot, target);
+                  f.cryHead = false;
+               }
+
                if (spot == null) {
                   f.cryMode = 4;
                   f.cryFails++;
@@ -8416,6 +8569,10 @@ final class Fighting {
                f.cryAnchored = true;
                f.cryAnchor = spot[0];
                f.cryGuard = spot[1];
+               if (f.cryHead) {
+                  flog(f, "crystal pvp: head-level anchor close to the target's feet, no obsidian");
+               }
+
                f.cryAnchorCool = now + PvpBotMod.ANCHOR_COOLDOWN.asInt();
                f.cryStage = 30;
                return;
@@ -8463,6 +8620,14 @@ final class Fighting {
             }
 
             BlockPos base = cryPickBase(bot, target);
+            if (!f.cryAnchored && cryHeadKit(bot) && (cryOneHigher(bot, target) || dist >= 5.0) && chance(PvpBotMod.ANCHOR_CHANCE.value)
+               && now >= f.cryAnchorCool
+               && (base == null || cryDamage(target, cryPos(base), 6.0) < 5.0) && cryHeadSpot(bot, target) != null) {
+               // no obsidian spot that hurts the target enough: anchor it close to its feet instead
+               f.cryMode = 3;
+               return;
+            }
+
             if (base == null && dist <= 13.0 && f.cryFails < 3 && !f.cryNear) {
                BlockPos near = cryPickNear(bot, target);
                if (near != null) {
@@ -8815,6 +8980,19 @@ final class Fighting {
                BotSupport.swing(f);
                f.cryStage = 0;
                f.cryNext = now + 3;
+               if (f.cryMode != 3 && f.cryPoint == null) {
+                  // combo 1: pearl, hit, then 2 crystals as fast as possible
+                  BlockPos cb = cryPickBaseImpl(bot, target, true);
+                  if (cb != null) {
+                     f.cryBase = cb;
+                     f.cryAirLeft = 2;
+                     f.cryHitAfter = false;
+                     f.cryNear = false;
+                     f.cryStage = BotSupport.sw(bot).getBlockState(cb).isOf(Blocks.OBSIDIAN) ? 2 : 1;
+                     f.cryNext = now + 1;
+                     flog(f, "crystal pvp: pearl + hit landed, now 2 fast crystals");
+                  }
+               }
             } else if (now - f.cryWait > 40) {
                crystalEnd(server, name, f, "could not reach the target after the pearl");
             } else {
@@ -8824,6 +9002,43 @@ final class Fighting {
             }
 
             return;
+         case 25: {
+            // sprint to the crater (no pearl); pearl in if it takes too long
+            Vec3d cp = f.cryCrater;
+            if (cp == null) {
+               f.cryPoint = null;
+               f.cryStage = 0;
+               return;
+            }
+
+            double hd = Math.hypot(cp.x - bot.getX(), cp.z - bot.getZ());
+            if (hd <= 1.2 && Math.abs(cp.y - bot.getY()) <= 2.5) {
+               BotSupport.run(server, "player " + name + " stop");
+               f.cryPoint = null;
+               f.cryStage = 0;
+               f.cryNext = now + 1;
+               return;
+            }
+
+            if (now - f.cryWalkStart > 40) {
+               BotSupport.run(server, "player " + name + " stop");
+               if (BotSupport.findItemIndex(bot, Items.ENDER_PEARL) >= 0 && !Double.isNaN(pearlPitchClearAt(bot, cp.x, cp.y, cp.z))) {
+                  f.cryPoint = cp;
+                  f.cryStage = 20;
+               } else {
+                  f.cryPoint = null;
+                  f.cryStage = 0;
+               }
+
+               f.cryNext = now + 1;
+               return;
+            }
+
+            cryLook(server, name, cp.x, cp.y + 1.0, cp.z);
+            BotSupport.run(server, "player " + name + " move forward");
+            BotSupport.run(server, "player " + name + " sprint");
+            return;
+         }
          // ---- anchor combo ----
          case 30:
             BotSupport.run(server, "player " + name + " unsneak");
@@ -8875,6 +9090,13 @@ final class Fighting {
                return;
             }
 
+            if (f.cryGuard == null) {
+               // head-level anchor: no obsidian shield
+               f.cryStage = 36;
+               f.cryNext = now + 1;
+               return;
+            }
+
             if (!cryHold(server, name, bot, Items.OBSIDIAN)) {
                f.cryNext = now + 1;
                return;
@@ -8891,7 +9113,7 @@ final class Fighting {
             f.cryNext = now + 1;
             return;
          case 36: {
-            if (!w.getBlockState(f.cryGuard).isOf(Blocks.OBSIDIAN)) {
+            if (f.cryGuard != null && !w.getBlockState(f.cryGuard).isOf(Blocks.OBSIDIAN)) {
                f.cryFails++;
                f.cryStage = 34;
                if (f.cryFails > 3) {
@@ -8903,7 +9125,7 @@ final class Fighting {
 
             Vec3d ac = new Vec3d(f.cryAnchor.getX() + 0.5, f.cryAnchor.getY() + 0.5, f.cryAnchor.getZ() + 0.5);
             double self = cryDamage(bot, ac, 5.0) * 0.5;
-            if (!crySelfOk(bot, target, self)) {
+            if (!f.cryHead && !crySelfOk(bot, target, self)) {
                crystalEnd(server, name, f, "anchor blast would hurt the bot too much");
                return;
             }
@@ -8930,8 +9152,25 @@ final class Fighting {
             f.cryMode = 1;
             Vec3d crater = new Vec3d(f.cryAnchor.getX() + 0.5, f.cryAnchor.getY() + 0.5, f.cryAnchor.getZ() + 0.5);
             f.cryAnchor = null;
+            if (f.cryHead) {
+               // the crater the anchor blew: prefer a real hole near the target, else the anchor cell
+               BlockPos hole = cryFindCrater(bot, target);
+               if (hole != null) {
+                  crater = new Vec3d(hole.getX() + 0.5, hole.getY(), hole.getZ() + 0.5);
+               }
+            }
+
             f.cryPoint = crater;
-            if (BotSupport.findItemIndex(bot, Items.ENDER_PEARL) >= 0 && !Double.isNaN(pearlPitchClearAt(bot, crater.x, crater.y, crater.z))) {
+            f.cryCrater = crater;
+            boolean slow = bot.hasStatusEffect(net.minecraft.entity.effect.StatusEffects.SLOW_FALLING);
+            double cdist = Math.sqrt(bot.squaredDistanceTo(crater.x, crater.y, crater.z));
+            if (f.cryHead && !slow && cdist <= 9.0) {
+               // no slow falling: no pearl needed, sprint down to below the target's feet and spam crystals
+               f.cryStage = 25;
+               f.cryWalkStart = now;
+               f.cryNext = now + 1;
+               flog(f, "crystal pvp: no slow falling, sprinting to the crater");
+            } else if (BotSupport.findItemIndex(bot, Items.ENDER_PEARL) >= 0 && !Double.isNaN(pearlPitchClearAt(bot, crater.x, crater.y, crater.z))) {
                f.cryStage = 20;
                f.cryNext = now + 1;
                flog(f, "crystal pvp: pearling below the hole the anchor made, then crystals upward");
@@ -9491,7 +9730,7 @@ final class Fighting {
                   if (!startItemEscape(server, name, f, bot, target)) {
                      startEat(server, name, f, bot, true);
                   }
-               } else if (!predWebGap(server, name, f, bot, target, dist) && !startEatKnockback(server, name, f, bot, target, dist) && !startHealBuild(server, name, f, bot, target, dist) && !startBlockRun(server, name, f, bot, target) && !startElyEscape(server, name, f, bot, target) && !startItemEscape(server, name, f, bot, target)) {
+               } else if (!cryHealPearl(server, name, f, bot, target, dist, false) && !predWebGap(server, name, f, bot, target, dist) && !startEatKnockback(server, name, f, bot, target, dist) && !startHealBuild(server, name, f, bot, target, dist) && !startBlockRun(server, name, f, bot, target) && !startElyEscape(server, name, f, bot, target) && !startItemEscape(server, name, f, bot, target)) {
                   startFlee(server, name, f, 0);
                }
             } else if (mirrorHealStep(server, name, f, bot, target, dist, hpNow)) {
@@ -17010,7 +17249,9 @@ final class Fighting {
          BotSupport.run(server, "player " + name + " use continuous");
          if (!stayPut) {
             BotSupport.run(server, "player " + name + " move forward");
-            BotSupport.run(server, "player " + name + " jump continuous");
+            if (!(PvpBotMod.CRYSTAL.on() && BotSupport.findItemIndex(bot, Items.END_CRYSTAL) >= 0)) {
+               BotSupport.run(server, "player " + name + " jump continuous");
+            }
          }
 
          f.phase = PvpBotMod.Phase.EAT;
@@ -17199,11 +17440,18 @@ final class Fighting {
 
    /** the bot is trying to heal but the target keeps hitting it: roll once per heal attempt. */
    static boolean healPressureStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      boolean healing = f.phase == PvpBotMod.Phase.FLEE && f.fleeFor == 0 || f.phase == PvpBotMod.Phase.EAT;
+      if (healing && !f.inCocoon && !f.mirrorEat && !f.knockEat) {
+         noteHurt(f, bot, target);
+         if (cryHealPearl(server, name, f, bot, target, dist, true)) {
+            return true;
+         }
+      }
+
       if (!PvpBotMod.HEAL_PRESSURE.on() || f.pressureRolled || f.inCocoon || f.mirrorEat || f.knockEat || f.windLoop) {
          return false;
       }
 
-      boolean healing = f.phase == PvpBotMod.Phase.FLEE && f.fleeFor == 0 || f.phase == PvpBotMod.Phase.EAT;
       noteHurt(f, bot, target);
       if (!healing || BotSupport.inCobweb(bot) || dist > 5.5) {
          return false;
@@ -18581,7 +18829,7 @@ final class Gui {
       catIcon("Extras", Items.SHIELD);
       cat("Auto Survival", "survivestop", "survivelogs", "survivestone", "survivefight", "survivethreatdist", "surviveloot", "survivemobs");
       catIcon("Auto Survival", Items.IRON_PICKAXE);
-      cat("Crystal", "crystal", "crystalescape", "crystalescapedmg", "crystalprephp", "crystalbackoff", "crystalchance", "crystalplacedelay", "crystalbreakdelay", "crystalmaxself", "crystalminhp", "crystalcooldown", "crystalpearl", "anchorchance", "anchorcooldown", "totemswapdelay");
+      cat("Crystal", "crystal", "crystalescape", "crystalescapedmg", "crystalprephp", "crystalbackoff", "crystalchance", "crystalplacedelay", "crystalbreakdelay", "crystalmaxself", "crystalminhp", "crystalcooldown", "crystalpearl", "crystalalwayspearl", "crystalhealpearl", "crystalheadanchor", "anchorchance", "anchorcooldown", "totemswapdelay");
       cat("Replay", "autorecord", "recordmax", "spechud", "hudicons");
       cat("Tiers", "nametagtiers");
       cat("TNT Cart", "tntcart", "tntcartchance", "tntcartneutral", "cartdefense", "cartdefensedist", "cartbreakchance", "cartdefensedelay", "cartmode", "cartfinishhp", "cartminhp", "cartpunish", "tntcartsafedist", "tntcartdrawticks", "tntcartcooldown", "xcartpreload", "xcartchance", "pearlcartchance", "cartdefensedelaymax", "cartdefensemiss", "walldef", "walldefchance");
@@ -18607,7 +18855,8 @@ final class Gui {
       icon(Items.NAME_TAG, "nametagtiers");
       icon(Items.END_CRYSTAL, "crystal", "crystalescape", "crystalescapedmg", "crystalprephp", "crystalbackoff", "crystalchance", "crystalplacedelay", "crystalbreakdelay", "crystalmaxself", "crystalminhp", "crystalcooldown");
       icon(Items.ENDER_PEARL, "crystalpearl");
-      icon(Items.RESPAWN_ANCHOR, "anchorchance", "anchorcooldown");
+      icon(Items.RESPAWN_ANCHOR, "anchorchance", "anchorcooldown", "crystalheadanchor");
+      icon(Items.ENDER_PEARL, "crystalalwayspearl", "crystalhealpearl");
       icon(Items.TOTEM_OF_UNDYING, "totemswapdelay");
       icon(Items.TNT_MINECART, "tntcart", "tntcartchance", "cartmode", "cartfinishhp", "cartminhp", "cartpunish", "tntcartsafedist", "tntcartdrawticks", "tntcartcooldown");
       icon(Items.GOLDEN_APPLE, "eat", "eatspread", "eatoddchance", "eatcount", "eatuntil", "hungereat", "flee", "eatknockback", "eatknockbackticks");
