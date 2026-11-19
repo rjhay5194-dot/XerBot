@@ -26426,6 +26426,35 @@ final class Replay {
          }
       }
 
+      // human fighters are recorded too (the player a recorded bot fights, or anyone close to one), so the replay shows them as a puppet
+      java.util.List<ServerPlayerEntity> humans = new java.util.ArrayList<>();
+      for (ServerPlayerEntity hp : server.getPlayerManager().getPlayerList()) {
+         String hn = hp.getName().getString();
+         boolean known = r.idx.containsKey(hn);
+         if (PvpBotMod.BOTS.contains(hn) || hp.isSpectator() || !hp.isAlive() && !known) {
+            continue;
+         }
+
+         boolean take = known;
+         for (ServerPlayerEntity b : bots) {
+            if (take) {
+               break;
+            }
+
+            PvpBotMod.Fight bf = PvpBotMod.FIGHTS.get(b.getName().getString());
+            if (bf != null && hn.equalsIgnoreCase(bf.target)) {
+               take = true;
+            } else if (r.only == null && BotSupport.sw(b) == BotSupport.sw(hp) && b.squaredDistanceTo(hp) < 64.0 * 64.0) {
+               take = true;
+            }
+         }
+
+         if (take) {
+            humans.add(hp);
+         }
+      }
+
+      bots.addAll(humans);
       for (ServerPlayerEntity b : bots) {
          String name = b.getName().getString();
          net.minecraft.server.world.ServerWorld w = BotSupport.sw(b);
@@ -27276,6 +27305,36 @@ final class Replay {
                }, "Skipped " + s + "s.");
             }))
       );
+      rp.then(CommandManager.literal("debug").executes(ctx -> {
+         ServerPlayerEntity v = ctx.getSource().getPlayerOrThrow();
+         net.minecraft.entity.Entity cam = v.getCameraEntity() == null ? v : v.getCameraEntity();
+         StringBuilder sb = new StringBuilder("Camera: " + cam.getName().getString() + " at " + (int)cam.getX() + " " + (int)cam.getY() + " " + (int)cam.getZ()
+            + " | you are at " + (int)v.getX() + " " + (int)v.getY() + " " + (int)v.getZ() + " | view distance " + v.getViewDistance() + "\n");
+         if (play != null) {
+            for (int i = 0; i < play.puppet.length; i++) {
+               ServerPlayerEntity pp = ctx.getSource().getServer().getPlayerManager().getPlayer(play.puppet[i]);
+               sb.append("puppet ").append(play.puppet[i]).append(pp == null ? " OFFLINE" : " at " + (int)pp.getX() + " " + (int)pp.getY() + " " + (int)pp.getZ()).append('\n');
+            }
+         }
+
+         int n = 0;
+         for (net.minecraft.entity.Entity e : BotSupport.sw(v).getOtherEntities(cam, cam.getBoundingBox().expand(40.0), x -> x != v)) {
+            if (n++ >= 14) {
+               sb.append("...");
+               break;
+            }
+
+            sb.append(e.getType().getUntranslatedName()).append(' ').append(e.getName().getString()).append(" dist ").append((int)e.distanceTo(cam)).append('\n');
+         }
+
+         if (n == 0) {
+            sb.append("No entities within 40 blocks of the camera.");
+         }
+
+         String out = sb.toString();
+         ctx.getSource().sendFeedback(() -> Text.literal(out), false);
+         return 1;
+      }));
       rp.then(
          CommandManager.literal("watch")
             .then(CommandManager.argument("bot", StringArgumentType.word()).executes(ctx -> {
