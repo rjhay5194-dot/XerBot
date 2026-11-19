@@ -348,6 +348,18 @@ public class PvpBotMod implements ModInitializer {
    static final PvpBotMod.Opt SURPRISE_CHANCE = opt("surprisechance", "surprise_chance", 80.0, 0.0, 100.0, false, "percent chance the bot is caught off guard when the target suddenly strafes off its aim, and is late to aim back at it");
    static final PvpBotMod.Opt SURPRISE_MIN = opt("surprisedelaymin", "surprise_delay_min", 4.0, 0.0, 30.0, false, "shortest ticks the bot stays slow to aim after being surprised");
    static final PvpBotMod.Opt SURPRISE_MAX = opt("surprisedelaymax", "surprise_delay_max", 10.0, 0.0, 40.0, false, "longest ticks the bot stays slow to aim after being surprised");
+   static final PvpBotMod.Opt AIM_FAST = opt("aimfast", "aim_fast", 60.0, 0.0, 100.0, false, "how much a fast moving target (across the bot's view, up or down counts extra) hurts the bot's melee aim: more lag, aim error and slower turning, so swings can miss. The bot's own movement never costs aim. 0 = off");
+   static final PvpBotMod.Opt AIM_FAST_START = opt("aimfaststart", "aim_fast_start", 0.12, 0.02, 0.5, false, "target speed across the bot's view (blocks per tick) where the fast-target aim penalty starts (walking sideways is about 0.2)");
+   static final PvpBotMod.Opt AIM_FAST_MAX = opt("aimfastmax", "aim_fast_max", 14.0, 1.0, 40.0, false, "largest random aim error in degrees the fast-target penalty adds");
+   static final PvpBotMod.Opt AIM_ADAPT = opt("aimadapt", "aim_adapt", 50.0, 0.0, 100.0, false, "after 2 missed swings at a fast target the bot slows down (stops sprinting) and tightens its aim: percent of the penalty removed for 1.5 seconds");
+   static final PvpBotMod.Opt SNAP_STRAFE = opt("snapstrafe", "snap_strafe", 1.0, 0.0, 1.0, true, "sometimes the bot snap-strafes: right, left, right... switching side every 8-10 ticks (no crits, no jumps while it does), sometimes with a short backward step before the next side");
+   static final PvpBotMod.Opt SNAP_STRAFE_CHANCE = opt("snapstrafechance", "snap_strafe_chance", 12.0, 0.0, 100.0, false, "percent chance, rolled every 5 ticks while the bot is close to the target, that a snap-strafe burst starts");
+   static final PvpBotMod.Opt SNAP_STRAFE_MIN = opt("snapstrafemin", "snap_strafe_min", 8.0, 3.0, 30.0, false, "shortest ticks one side of the snap strafe is held");
+   static final PvpBotMod.Opt SNAP_STRAFE_MAX = opt("snapstrafemax", "snap_strafe_max", 10.0, 3.0, 30.0, false, "longest ticks one side of the snap strafe is held");
+   static final PvpBotMod.Opt SNAP_STRAFE_COUNT = opt("snapstrafecount", "snap_strafe_count", 5.0, 2.0, 12.0, false, "most side switches in one snap-strafe burst (the real number is random between 2 and this)");
+   static final PvpBotMod.Opt SNAP_STRAFE_BACK = opt("snapstrafeback", "snap_strafe_back", 40.0, 0.0, 100.0, false, "percent chance a side switch adds a short backward step before the bot goes forward again on the next side");
+   static final PvpBotMod.Opt SNAP_STRAFE_RANGE = opt("snapstraferange", "snap_strafe_range", 5.0, 2.0, 8.0, false, "the snap strafe only runs within this many blocks of the target");
+   static final PvpBotMod.Opt SNAP_STRAFE_COOLDOWN = opt("snapstrafecooldown", "snap_strafe_cooldown", 80.0, 0.0, 400.0, false, "ticks between snap-strafe bursts");
    static final PvpBotMod.Opt TRACK_LAG = opt("tracklag", "track_lag", 40.0, 0.0, 100.0, false, "how far the aim trails behind a fast moving target (0 = perfect tracking)");
    static final PvpBotMod.Opt PANIC_HEARTS = opt("panichearts", "panic_hearts", 3.0, 0.5, 10.0, false, "hearts at or under which the bot panics (random jumps and strafes)");
    static final PvpBotMod.Opt PANIC_HOP = opt("panichopchance", "panic_hop_chance", 30.0, 0.0, 100.0, false, "percent chance per half second to hop while panicking");
@@ -2770,6 +2782,9 @@ public class PvpBotMod implements ModInitializer {
       int xBackTicks;
       int xBackUntil;
       double lastAimDiff;
+      int snapUntil, snapNext, snapLeft, snapDir, snapBackUntil, snapCool;
+      double tpX, tpY, tpZ, tvx, tvy, tvz;
+      int tpTick = -1, aimMiss, aimAdaptUntil;
       int surpriseUntil;
       int surpriseCatchUntil;
       int surpriseCool;
@@ -3672,6 +3687,11 @@ final class BotSupport {
 
    /** true while a Speed II (or higher) bot must not jump or crit: it needs a run of landed hits first. */
    static boolean speedNoJump(ServerPlayerEntity bot, PvpBotMod.Fight f) {
+      // snap strafe: no jumps and no crits while the bot switches sides
+      if (f != null && PvpBotMod.globalTick < f.snapUntil) {
+         return true;
+      }
+
       // crystal (vanilla) bots never jump or jump-crit: it is dangerous in crystal pvp
       if (bot != null && f != null && PvpBotMod.CRYSTAL.on() && findItemIndex(bot, Items.END_CRYSTAL) >= 0) {
          return true;
@@ -5243,7 +5263,67 @@ final class BotSupport {
       return "player " + name + " look at " + fmt(px) + " " + fmt(py) + " " + fmt(pz);
    }
 
+   /** measures the target's real speed from its position (server-side player velocity is unreliable), smoothed over a few ticks. */
+   static void updateTargetVel(PvpBotMod.Fight f, ServerPlayerEntity target) {
+      int now = PvpBotMod.globalTick;
+      if (f.tpTick == now) {
+         return;
+      }
+
+      if (f.tpTick < 0 || now - f.tpTick > 6) {
+         f.tvx = 0.0;
+         f.tvy = 0.0;
+         f.tvz = 0.0;
+      } else {
+         double dt = now - f.tpTick;
+         f.tvx = f.tvx * 0.5 + (target.getX() - f.tpX) / dt * 0.5;
+         f.tvy = f.tvy * 0.5 + (target.getY() - f.tpY) / dt * 0.5;
+         f.tvz = f.tvz * 0.5 + (target.getZ() - f.tpZ) / dt * 0.5;
+      }
+
+      f.tpX = target.getX();
+      f.tpY = target.getY();
+      f.tpZ = target.getZ();
+      f.tpTick = now;
+   }
+
+   /**
+    * how much the target's speed ACROSS the bot's line of sight hurts the aim (0 = none, 1 = at the threshold, up to about 3). Running straight at or away
+    * from the bot costs nothing, vertical speed counts extra, and the bot's own movement is never counted (it predicts its own moves).
+    */
+   static double aimFastFactor(PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
+      if (PvpBotMod.AIM_FAST.value <= 0.0 || bot == null || f == null) {
+         return 0.0;
+      }
+
+      updateTargetVel(f, target);
+      double ux = target.getX() - bot.getX();
+      double uy = target.getBodyY(0.5) - bot.getEyeY();
+      double uz = target.getZ() - bot.getZ();
+      double len = Math.sqrt(ux * ux + uy * uy + uz * uz);
+      if (len < 0.5) {
+         return 0.0;
+      }
+
+      ux /= len;
+      uy /= len;
+      uz /= len;
+      double along = f.tvx * ux + f.tvy * uy + f.tvz * uz;
+      double px = f.tvx - along * ux;
+      double py = (f.tvy - along * uy) * 1.5;
+      double pz = f.tvz - along * uz;
+      double speed = Math.sqrt(px * px + py * py + pz * pz);
+      double start = Math.max(0.02, PvpBotMod.AIM_FAST_START.value);
+      double e = Math.min(3.0, Math.max(0.0, (speed - start) / start)) * PvpBotMod.AIM_FAST.value / 100.0;
+      if (PvpBotMod.globalTick < f.aimAdaptUntil) {
+         e *= 1.0 - PvpBotMod.AIM_ADAPT.value / 100.0;
+      }
+
+      return e;
+   }
+
    static String aimCmd(String name, ServerPlayerEntity bot, ServerPlayerEntity target, PvpBotMod.Fight f) {
+      double fast = aimFastFactor(f, bot, target);
       double w = PvpBotMod.WOBBLE.value;
       double lead = PvpBotMod.PREDICT_TICKS.value;
       int aimT = aimTicks(f);
@@ -5280,7 +5360,7 @@ final class BotSupport {
          return "player " + name + " look " + String.format(Locale.ROOT, "%.1f %.1f", ny, sp);
       }
 
-      if (PvpBotMod.CLOSE_AIM.value > 0.0 && shl < PvpBotMod.CLOSE_AIM.value) {
+      if (PvpBotMod.CLOSE_AIM.value > 0.0 && shl < PvpBotMod.CLOSE_AIM.value * (fast > 0.3 ? 0.35 : 1.0)) {
          // point-blank: lock on exactly, at once (leading, turn limits, spread and overshoot only make it miss a target circling at 0.5 blocks)
          f.overshotLast = false;
          return "player " + name + " look upon " + target.getName().getString() + " eyes";
@@ -5296,7 +5376,7 @@ final class BotSupport {
          && ThreadLocalRandom.current().nextDouble() * 100.0 < PvpBotMod.OVERSHOOT_CHANCE.value;
       Vec3d lagVel = target.getVelocity();
       boolean lagging = PvpBotMod.TRACK_LAG.value > 0.0 && lagVel.x * lagVel.x + lagVel.z * lagVel.z > 0.0144;
-      if (w <= 0.0 && !leading && !spread && !overshootRoll && !f.overshotLast && !lagging) {
+      if (w <= 0.0 && !leading && !spread && !overshootRoll && !f.overshotLast && !lagging && fast <= 0.05) {
          return lookCmd(name, target.getName().getString());
       } else {
          double tx = target.getX();
@@ -5325,11 +5405,20 @@ final class BotSupport {
             tz -= lagVel.z * lagTicks;
          }
 
+         double fastLagY = 0.0;
+         if (fast > 0.05) {
+            // fast target: the aim trails behind where it really is
+            double extra = Math.min(4.0, fast * 2.0);
+            tx -= f.tvx * extra;
+            tz -= f.tvz * extra;
+            fastLagY = -Math.max(-1.2, Math.min(1.2, f.tvy * extra));
+         }
+
          double dx = tx - bot.getX();
          double dz = tz - bot.getZ();
-         double targetY = spread
+         double targetY = (spread
             ? target.getY() + ThreadLocalRandom.current().nextDouble() * Math.max(0.1, target.getHeight() - 0.2)
-            : target.getEyeY();
+            : target.getEyeY()) + fastLagY;
          double dy = targetY - bot.getEyeY();
          double yaw = Math.toDegrees(Math.atan2(-dx, dz));
          double pitch = -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)));
@@ -5338,12 +5427,26 @@ final class BotSupport {
             pitch += (ThreadLocalRandom.current().nextDouble() * 2.0 - 1.0) * w * 0.5;
          }
 
+         if (fast > 0.05) {
+            double err = Math.min(PvpBotMod.AIM_FAST_MAX.value, fast * 5.0);
+            yaw += (ThreadLocalRandom.current().nextDouble() * 2.0 - 1.0) * err;
+            pitch += (ThreadLocalRandom.current().nextDouble() * 2.0 - 1.0) * err * 0.6;
+         }
+
          if (f.overshotLast) {
             f.overshotLast = false;
          } else if (overshootRoll) {
             double diff = wrapDegrees(yaw - bot.getYaw());
             yaw += Math.copySign(PvpBotMod.OVERSHOOT_DEGREES.value, diff == 0.0 ? 1.0 : diff);
             f.overshotLast = true;
+         }
+
+         if (fast > 0.05) {
+            // slower turning toward a fast target
+            double kf = Math.max(0.4, 1.0 - 0.25 * fast);
+            double dyawF = wrapDegrees(yaw - bot.getYaw());
+            yaw = bot.getYaw() + dyawF * kf;
+            pitch = bot.getPitch() + (pitch - bot.getPitch()) * kf;
          }
 
          if (aimT > 0 && PvpBotMod.AIM_VARY.on()) {
@@ -9641,7 +9744,8 @@ final class Fighting {
          }
       }
 
-      if (PvpBotMod.PRECISION_LOCK.on()) {
+      double fastAim = f.lastBot != null ? BotSupport.aimFastFactor(f, f.lastBot, target) : 0.0;
+      if (PvpBotMod.PRECISION_LOCK.on() && fastAim <= 0.15) {
          if (f.lastBot != null && PvpBotMod.CLOSE_AIM.value > 0.0 && BotSupport.reachDistance(f.lastBot, target) <= PvpBotMod.CLOSE_AIM.value) {
             BotSupport.run(server, "player " + name + " look upon " + target.getName().getString() + " eyes");
          } else {
@@ -9662,8 +9766,18 @@ final class Fighting {
             }
 
             self.attack(target);
+            f.aimMiss = 0;
             if (swapped) {
                f.weaponSlot = -1;
+            }
+         } else if (self != null && fastAim > 0.2 && BotSupport.reachDistance(self, target) <= BotSupport.meleeReach() && self.canSee(target)) {
+            // in reach but the crosshair was off the fast target: a missed swing. After two, slow down and tighten the aim
+            f.aimMiss++;
+            if (f.aimMiss >= 2 && PvpBotMod.AIM_ADAPT.value > 0.0) {
+               f.aimMiss = 0;
+               f.aimAdaptUntil = PvpBotMod.globalTick + 30;
+               BotSupport.run(server, "player " + name + " unsprint");
+               flog(f, "aim: missed a fast target twice, slowing down and tightening the aim");
             }
          }
 
@@ -9758,6 +9872,87 @@ final class Fighting {
       BotSupport.run(server, "player " + name + " move");
       axisCmd(server, name, f);
       f.strafeDir = 0;
+   }
+
+   /** snap strafe burst: left/right every 8-10 ticks, sometimes with a backward step in between. Returns true while it owns the movement. */
+   static boolean snapStrafeStep(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target, double dist) {
+      int now = PvpBotMod.globalTick;
+      if (!PvpBotMod.SNAP_STRAFE.on()) {
+         return false;
+      }
+
+      boolean active = now < f.snapUntil;
+      double range = PvpBotMod.SNAP_STRAFE_RANGE.value;
+      if (!active) {
+         if (now < f.snapCool || now % 5 != 0 || dist > range || dist < 1.2 || f.crit || f.hopping || f.edgeHold || f.apprStrafe || f.blocking || f.paused
+            || f.keepMode <= 0 || f.comboLeft > 0 || f.sidestepUntil > now || !bot.isOnGround() || BotSupport.inCobweb(bot) || targetMaceThreat(bot, target)
+            || !chance(PvpBotMod.SNAP_STRAFE_CHANCE.value)) {
+            return false;
+         }
+
+         int mx = Math.max(2, PvpBotMod.SNAP_STRAFE_COUNT.asInt());
+         f.snapLeft = 2 + ThreadLocalRandom.current().nextInt(mx - 1);
+         f.snapDir = ThreadLocalRandom.current().nextBoolean() ? 1 : -1;
+         f.snapNext = now;
+         f.snapBackUntil = 0;
+         f.snapUntil = now + f.snapLeft * (Math.max(PvpBotMod.SNAP_STRAFE_MAX.asInt(), PvpBotMod.SNAP_STRAFE_MIN.asInt()) + 4) + 10;
+         f.snapDir = -f.snapDir; // flipped again by the first switch
+         f.circleDir = 0;
+         return snapStrafeStep(server, name, f, bot, target, dist);
+      }
+
+      if (dist > range + 2.0 || f.crit || f.hopping || f.edgeHold || f.blocking || f.paused || f.keepMode <= 0 || BotSupport.inCobweb(bot) || targetMaceThreat(bot, target)) {
+         snapStrafeEnd(server, name, f, now);
+         return false;
+      }
+
+      if (f.snapBackUntil != 0) {
+         if (now < f.snapBackUntil) {
+            return true;
+         }
+
+         f.snapBackUntil = 0;
+         resumeMove(server, name, f);
+      }
+
+      if (now >= f.snapNext) {
+         if (f.snapLeft <= 0) {
+            snapStrafeEnd(server, name, f, now);
+            return false;
+         }
+
+         f.snapLeft--;
+         f.snapDir = -f.snapDir;
+         f.strafeDir = f.snapDir;
+         BotSupport.run(server, "player " + name + " move " + (f.snapDir > 0 ? "left" : "right"));
+         double ux = target.getX() - bot.getX();
+         double uz = target.getZ() - bot.getZ();
+         double ul = Math.max(0.1, Math.sqrt(ux * ux + uz * uz));
+         boolean safeBehind = !BotSupport.hazardAt(BotSupport.sw(bot), bot.getX() - ux / ul * 1.4, bot.getY(), bot.getZ() - uz / ul * 1.4);
+         if (safeBehind && dist < range - 0.5 && chance(PvpBotMod.SNAP_STRAFE_BACK.value)) {
+            // a short backward step before it goes forward again on the next side
+            BotSupport.run(server, "player " + name + " unsprint");
+            BotSupport.run(server, "player " + name + " move backward");
+            f.snapBackUntil = now + 3 + ThreadLocalRandom.current().nextInt(2);
+         } else {
+            axisCmd(server, name, f);
+         }
+
+         int mn = Math.max(3, PvpBotMod.SNAP_STRAFE_MIN.asInt());
+         int mxT = Math.max(mn, PvpBotMod.SNAP_STRAFE_MAX.asInt());
+         f.snapNext = now + mn + ThreadLocalRandom.current().nextInt(mxT - mn + 1);
+      }
+
+      return true;
+   }
+
+   static void snapStrafeEnd(MinecraftServer server, String name, PvpBotMod.Fight f, int now) {
+      f.snapUntil = 0;
+      f.snapLeft = 0;
+      f.snapBackUntil = 0;
+      f.snapCool = now + PvpBotMod.SNAP_STRAFE_COOLDOWN.asInt();
+      stopStrafe(server, name, f);
+      resumeMove(server, name, f);
    }
 
    static void maybeAim(MinecraftServer server, String name, PvpBotMod.Fight f, ServerPlayerEntity bot, ServerPlayerEntity target) {
@@ -10205,7 +10400,8 @@ final class Fighting {
                            f.nextStrafeTick = Math.max(f.nextStrafeTick, PvpBotMod.globalTick + 8);
                         }
 
-                        boolean circling = (circleOn || f.comboLeft > 0) && !f.hopping && !f.edgeHold && dist <= 5.0 && !targetMaceThreat(bot, target);
+                        boolean snapping = snapStrafeStep(server, name, f, bot, target, dist);
+                        boolean circling = !snapping && (circleOn || f.comboLeft > 0) && !f.hopping && !f.edgeHold && dist <= 5.0 && !targetMaceThreat(bot, target);
                         if (circling) {
                            // crit-circle: keep one strafe direction (a circle, not a zig-zag) while staying close
                            if (f.circleDir == 0 || bot.horizontalCollision) {
@@ -10218,6 +10414,8 @@ final class Fighting {
                               axisCmd(server, name, f);
                               f.nextStrafeTick = PvpBotMod.globalTick + 6;
                            }
+                        } else if (snapping) {
+                           // the snap strafe owns the movement
                         } else if (apprZone) {
                            approachStrafeStep(server, name, f);
                         } else if (PvpBotMod.STRAFE.on() && !f.hopping && !f.crit && dist <= 6.0 && !targetMaceThreat(bot, target)) {
@@ -19079,7 +19277,7 @@ final class Gui {
       cat("Wind & Mace", "windclimb", "windclimbheight", "windmacechance", "windmacehearts", "windmacecooldown", "finishmacechance", "adapthits", "adaptmacechance", "adaptmacemin", "adaptmacemax", "windjumpdelay", "windjumpchance", "macetrade", "maceoutnumbered", "maceoutnumberedcount", "maceoutnumberedboost", "healabort", "windcounter", "windcounterchance", "windcounterrange", "windcountercooldown", "macefear", "macefearrun", "macefearradius", "macefeardist");
       cat("Mace Pressure", "macefinishaggro", "macefinishhearts", "macetotem", "maceretry", "maceretrymax", "macechaingap", "macepressure", "macepressurerange", "webmace", "macekeepdist", "maceaimerror", "macemistake", "windjumplatechance", "windjumplatemax", "divelead");
       cat("Opening", "opening", "openingdist", "openwait", "openwebchance", "openwebcount");
-      cat("Human", "flickturns", "tracklag", "surprisechance", "surprisedelaymin", "surprisedelaymax", "panichearts", "panichopchance", "confidence", "confidencestrength", "aimvary", "aimvarymin", "aimvarymax", "aimvarychance", "aimvaryseconds");
+      cat("Human", "flickturns", "aimfast", "aimfaststart", "aimfastmax", "aimadapt", "tracklag", "surprisechance", "surprisedelaymin", "surprisedelaymax", "panichearts", "panichopchance", "confidence", "confidencestrength", "aimvary", "aimvarymin", "aimvarymax", "aimvarychance", "aimvaryseconds");
       cat("Eating", "mirrorheal", "mirrorfightdist", "healpressure", "healpressureweb", "healpressureback");
       cat("Sword Tech", "jrhit", "jrhitchance", "jrhitlate");
       cat("Eating", "knockeat", "knockeatchance", "knockeatmin", "knockeatmax", "cocoonmindist");
@@ -19095,7 +19293,7 @@ final class Gui {
       cat("Debug", "fightlog");
       cat("Building", "chasehop", "chasehopdist", "chasehopchance", "chasehopcooldown", "healbuild", "healbuildchance", "healbuildfull", "healbuildmax", "repairseconds");
       catIcon("Building", Items.OAK_PLANKS);
-      cat("Extras", "shieldextra", "approachstrafe", "approachstrafedist", "approachstrafestop", "approachstrafechance", "approachstrafehold", "hitcrouch", "hitcrouchticks", "headwebwater", "headwebwaterticks");
+      cat("Extras", "shieldextra", "snapstrafe", "snapstrafechance", "snapstrafemin", "snapstrafemax", "snapstrafecount", "snapstrafeback", "snapstraferange", "snapstrafecooldown", "approachstrafe", "approachstrafedist", "approachstrafestop", "approachstrafechance", "approachstrafehold", "hitcrouch", "hitcrouchticks", "headwebwater", "headwebwaterticks");
       catIcon("Extras", Items.SHIELD);
       cat("Auto Survival", "survivestop", "survivelogs", "survivestone", "survivefight", "survivethreatdist", "surviveloot", "survivemobs");
       catIcon("Auto Survival", Items.IRON_PICKAXE);
@@ -19147,7 +19345,7 @@ final class Gui {
       );
       icon(Items.GOLDEN_SWORD, "backawaychance", "backawayticks", "alwayscrit", "alwayscritdist", "alwayscritspeed", "alwayscritchance");
       icon(Items.COBWEB, "wallwebchance", "wallwebdist", "wallwebcooldown");
-      icon(Items.ENDER_EYE, "turnspeed", "flickturns", "tracklag", "surprisechance", "surprisedelaymin", "surprisedelaymax");
+      icon(Items.ENDER_EYE, "turnspeed", "flickturns", "aimfast", "aimfaststart", "aimfastmax", "aimadapt", "tracklag", "surprisechance", "surprisedelaymin", "surprisedelaymax");
       icon(Items.GOLDEN_APPLE, "panichearts", "panichopchance");
       icon(Items.NETHER_STAR, "confidence", "confidencestrength");
       icon(Items.CROSSBOW, "xcartpreload", "xcartchance");
